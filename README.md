@@ -1,27 +1,25 @@
-# Multi-Agent Swarm v2.2
+# Multi-Agent Swarm v2.3
 
 **一个极简、可靠、高效的多智能体群智慧框架**  
-仅需 **1 个 Python 文件 + 1 个 YAML 配置 + skill/ 目录**，即可实现类似 Grok 4.2 的多智能体协作。
+**支持固定模式 + 智能模式**，像 Grok 4.2 团队一样实现真正涌现的群智慧。
 
-支持：
-- **并行执行**（每轮所有智能体同时思考）
-- **每个智能体独立 LLM**（不同 API Key、base_url、model）
-- **流式输出**（per-agent 可开关）
-- **固定轮次讨论**（默认 3 轮，**绝对无死循环**）
-- **动态 Skill 系统**（`skill/` 目录下 `.py` 自动转为 Tool Calling，`.md` 自动注入共享知识）
-- **OpenAI 完全兼容接口**（OpenAI、Groq、DeepSeek、Ollama、vLLM、本地等）
-- **完整日志**（`swarm.log`）
-- **max_tokens 默认 4096**（推荐值，可全局/单 Agent 配置）
+**核心升级（v2.3）**：
+- **智能模式**（intelligent）：不再受固定轮次约束，**Leader 每轮智能评价质量 + 决定是否继续改进**，力求输出**最高质量**答案。
+- **固定模式**（fixed）：保持原有极简可靠（默认 3 轮）。
+- **安全机制**：智能模式下仍有**硬性最大轮次上限**（默认 10），**绝对不会死循环**。
+- 其余特性全部保留：并行执行、独立 LLM、流式输出、动态 Skill（skill/ 目录）、OpenAI 完全兼容、完整日志。
 
 ---
 
 ## 特性亮点（第一性原理设计）
 
-- **最小改动**：单文件主程序，无需任何框架
-- **最可靠**：固定轮次 + 单轮 Tool Calling + 异常隔离
-- **最易扩展**：Skill 放 `skill/` 即可，YAML 配置一切
-- **并行加速**：4 个智能体 ≈ 最慢 1 个的时间
-- **生产可用**：日志、错误处理、流式、文件读写全部内置
+- **最小改动**：仍然**单文件主程序 + 一个 YAML 配置**
+- **双模式灵活**：
+  - `fixed`：速度最快、成本最低、极度可靠
+  - `intelligent`：质量最高、自动迭代改进、接近真实团队 brainstorm
+- **并行加速**：每轮所有智能体**真正同时工作**
+- **动态 Skill 系统**：`skill/` 下 `.py` 自动变 Tool Calling，`.md` 自动注入共享知识
+- **生产级可靠**：固定/智能双保险 + 异常隔离 + 完整日志
 
 ---
 
@@ -29,16 +27,16 @@
 
 ```
 multi-agent-swarm/
-├── multi_agent_swarm_v2.py     # 主程序（唯一需要运行的文件）
-├── swarm_config.yaml           # 全部配置
-├── swarm.log                   # 自动生成的运行日志
-├── skill/                      # 动态 Skill 目录
+├── multi_agent_swarm_v2.py     # 主程序（唯一运行文件）
+├── swarm_config.yaml           # 全部配置（新增 mode）
+├── swarm.log                   # 自动生成的详细日志
+├── skill/                      # Skill 目录
 │   ├── read_file.py
 │   ├── write_file.py
 │   ├── list_dir.py
-│   └── knowledge.md            # 任意 .md 文件 → 自动成为全团队共享知识
-├── reports/                    # 示例输出目录（可自行创建）
-└── output/                     # 示例输出目录（可自行创建）
+│   └── knowledge.md            # 任意 .md 自动成为团队共享知识
+├── reports/                    # 示例输出目录（建议创建）
+└── output/                     # 示例输出目录（建议创建）
 ```
 
 ---
@@ -49,7 +47,7 @@ multi-agent-swarm/
 pip install openai pyyaml
 ```
 
-**无需其他依赖**（Python 3.8+）
+**Python 3.8+** 即可，无其他依赖。
 
 ---
 
@@ -58,13 +56,14 @@ pip install openai pyyaml
 ```yaml
 openai:
   default_model: "gpt-4o-mini"
-  default_max_tokens: 4096          # 我推荐的全局默认值
+  default_max_tokens: 4096          # 推荐全局默认值
 
 swarm:
-  num_agents: 4                     # 默认智能体数量
-  max_rounds: 3                     # 默认讨论轮次（固定，不会死循环）
+  mode: "intelligent"               # ← 新增！固定用 "fixed"，追求最高质量用 "intelligent"
+  num_agents: 4
+  max_rounds: 10                    # fixed 模式默认 3，intelligent 模式默认 10（安全上限）
   log_file: "swarm.log"
-  skills_dir: "skill"               # Skill 目录路径
+  skills_dir: "skill"
 
 agents:
   - name: Grok
@@ -74,7 +73,7 @@ agents:
     model: "gpt-4o"
     temperature: 0.75
     stream: true
-    max_tokens: 8192                # 可覆盖全局默认
+    max_tokens: 8192
     enabled_tools: ["read_file", "write_file", "list_dir"]
 
   - name: Harper
@@ -118,15 +117,13 @@ agents:
 python multi_agent_swarm_v2.py
 ```
 
-程序会自动读取配置并执行示例任务。
-
 ### 2. 在其他代码中调用（推荐）
 
 ```python
 from multi_agent_swarm_v2 import MultiAgentSwarm
 
-swarm = MultiAgentSwarm()                     # 自动读取 swarm_config.yaml
-answer = swarm.solve("请帮我写一篇关于量子计算的科普文章，并保存到 ./reports/quantum.md")
+swarm = MultiAgentSwarm()   # 自动读取 swarm_config.yaml
+answer = swarm.solve("请帮我写一篇关于『2026 年东京人工智能产业趋势』的深度报告，并保存到 ./reports/tokyo_ai_2026.md")
 print(answer)
 ```
 
@@ -135,80 +132,57 @@ print(answer)
 ## 示例任务
 
 ```python
-# 示例1：读取知识库并生成报告
-swarm.solve("读取 skill/knowledge.md 中的内容，结合当前东京房价趋势，写一篇分析报告并保存到 ./reports/tokyo_housing.md")
-
-# 示例2：多智能体 brainstorm
+# 示例1：智能模式下追求最高质量
 swarm.solve("用最通俗语言解释量子纠缠，并说明它在量子计算中的应用")
 
-# 示例3：代码相关任务
+# 示例2：结合 Skill 生成报告
+swarm.solve("读取 skill/knowledge.md 中的内容，结合当前东京房价趋势，写一篇分析报告并保存到 ./reports/tokyo_housing.md")
+
+# 示例3：代码生成任务
 swarm.solve("帮我设计一个 FastAPI 用户注册接口，并把完整代码写入 ./output/user_api.py")
 ```
 
 ---
 
-## 如何添加新 Skill（30 秒搞定）
-
-1. 在 `skill/` 目录新建 `my_skill.py`
-
-```python
-# skill/my_skill.py
-def execute(param1: str, param2: int = 10) -> str:
-    return f"执行成功！param1={param1}, param2={param2}"
-
-schema = {
-    "type": "function",
-    "function": {
-        "name": "my_skill",
-        "description": "我的自定义工具描述",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "param1": {"type": "string", "description": "参数1"},
-                "param2": {"type": "integer", "description": "参数2"}
-            },
-            "required": ["param1"]
-        }
-    }
-}
-```
-
-2. 在任意 Agent 的 `enabled_tools` 中添加 `"my_skill"`
-
-3. 重启程序即可使用！
-
-**支持格式**：
-- `.py` → Tool Calling（必须包含 `execute` 函数 + `schema`）
-- `.md` → 自动注入全团队 System Prompt（共享知识库）
-
----
-
 ## 工作流程（透明说明）
 
-1. 启动 → 加载 YAML + 动态扫描 `skill/`
-2. **每轮并行**：所有智能体同时调用各自 LLM（支持流式）
-3. 支持 Tool Calling（单轮，最可靠）
-4. 固定 `max_rounds` 轮后 → Leader 最终综合输出
-5. 全程记录 `swarm.log`
+### 固定模式（mode: "fixed"）
+1. 初始化历史
+2. **固定轮次**（默认 3 轮）并行让所有 Agent 贡献
+3. Leader 最终综合 → 输出
 
-**绝对不会死循环**（固定 for 循环）
+**优点**：速度快、可预测、成本低。
+
+### 智能模式（mode: "intelligent"）← 新增核心
+1. 第 1 轮并行贡献
+2. **Leader 智能评价**（输出结构化 JSON：quality_score、decision=continue/stop、reason、suggestions）
+3. 如果 Leader 判断已达最高质量（score ≥8 且 decision=stop）→ 立即输出最终答案
+4. 否则根据 suggestions 继续下一轮改进（所有 Agent 自动看到改进方向）
+5. **硬上限**：达到 `max_rounds`（默认 10）强制停止
+
+**优点**：真正追求“最好最高质量”，自动迭代，像真实团队一样自我改进。
+
+**绝对不会死循环**：无论哪种模式都有硬性轮次上限 + 日志全记录。
 
 ---
 
-## 高级配置
+## 如何添加新 Skill（30 秒）
 
-- 想限制并发：修改 `ThreadPoolExecutor(max_workers=2)`
-- 想异步版本：告诉我，我 1 分钟给你 async 版
-- 想更多内置 Skill：直接放 `skill/` 即可
+1. 在 `skill/` 新建 `my_skill.py`（模板同 v2.2）
+2. 在任意 Agent 的 `enabled_tools` 中加入名称
+3. 重启即可（自动加载）
 
 ---
 
-## 注意事项
+## 高级配置与注意事项
 
-- 请确保 `api_key` 和 `base_url` 正确
-- 大模型费用按实际 token 消耗计算
-- `skill/` 目录必须存在（否则会警告但仍可运行）
-- 推荐将 `reports/`、`output/` 加入 `.gitignore`
+- **切换模式**：只需改 `swarm.mode` 为 `fixed` 或 `intelligent`
+- **调整上限**：`max_rounds` 越大，智能模式质量越高（但成本也越高）
+- **流式输出**：仅 Leader 在最终综合时流式显示更清晰
+- **费用提醒**：智能模式 token 消耗更高，请根据需求选择
+- **推荐**：复杂/高质量需求用 `intelligent`，快速验证用 `fixed`
 
-**当前版本：v2.2（2026.02）**
+---
 
+**Made with ❤️ from 第一性原理**  
+当前版本：**v2.3（2026.02）**  
