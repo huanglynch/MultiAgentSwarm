@@ -3,8 +3,9 @@ openai:
   default_max_tokens: 4096        # 我推荐的默认值
 
 swarm:
+  mode: "intelligent"          # ← 新增！固定用 "fixed"，追求最高质量用 "intelligent"
+  max_rounds: 10               # fixed 模式默认 3，intelligent 模式默认 10（安全上限）
   num_agents: 4
-  max_rounds: 3                   # 默认 3 轮（固定轮次，无死循环）
   log_file: "swarm.log"
   skills_dir: "skills"
 
