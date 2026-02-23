@@ -228,7 +228,7 @@ review = swarm.solve("先用 list_dir 列出 ./src/ 目录所有 .py 文件，�
 - 把 `max_rounds` 设为 15  
 - 在 Leader 的 role 里加上“输出必须非常详细、举例充分、包含多角度分析和最佳实践对比”  
 - 智能模式下会自动迭代，直到 Leader 满意为止
-
+```
 ---
 
 ## Bug Investigation 使用专区（v2.3 新增 · 强烈推荐）
