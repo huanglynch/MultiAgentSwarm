@@ -1,95 +1,62 @@
 import yaml
 import logging
 import os
+import glob
+import importlib.util
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Callable
 from openai import OpenAI
 import json
 
-# ====================== 默认内置 Skill ======================
-def read_file(path: str) -> str:
-    """读取本地文件内容"""
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return f.read()
-    except Exception as e:
-        return f"读取失败: {str(e)}"
+# ====================== Skill 动态加载器 ======================
+def load_skills(skills_dir: str = "skill"):
+    tool_registry: Dict[str, Dict] = {}
+    shared_knowledge = ""
 
-def write_file(path: str, content: str) -> str:
-    """写入内容到本地文件（自动创建目录）"""
-    try:
-        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        return f"文件已成功写入: {path}"
-    except Exception as e:
-        return f"写入失败: {str(e)}"
+    if not os.path.exists(skills_dir):
+        logging.warning(f"⚠️ skill/ 目录不存在（{skills_dir}），将使用空工具集")
+        return tool_registry, shared_knowledge
 
-def list_dir(path: str = ".") -> str:
-    """列出目录下的文件和文件夹"""
-    try:
-        items = os.listdir(path)
-        return "\n".join([f"📄 {item}" if os.path.isfile(os.path.join(path, item)) else f"📁 {item}/" for item in items])
-    except Exception as e:
-        return f"列目录失败: {str(e)}"
+    # 1. 加载 .py 文件 → 可执行 Tool
+    for py_file in glob.glob(os.path.join(skills_dir, "*.py")):
+        if "__init__" in py_file:
+            continue
+        module_name = os.path.splitext(os.path.basename(py_file))[0]
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, py_file)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
 
-DEFAULT_TOOLS = {
-    "read_file": {
-        "func": read_file,
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "读取指定路径的本地文件内容",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"path": {"type": "string", "description": "文件路径"}},
-                    "required": ["path"]
+            if hasattr(module, "execute") and hasattr(module, "schema"):
+                name = getattr(module, "name", module_name)
+                tool_registry[name] = {
+                    "func": module.execute,
+                    "schema": module.schema
                 }
-            }
-        }
-    },
-    "write_file": {
-        "func": write_file,
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": "write_file",
-                "description": "将内容写入指定路径的文件（自动创建目录）",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "文件路径"},
-                        "content": {"type": "string", "description": "要写入的内容"}
-                    },
-                    "required": ["path", "content"]
-                }
-            }
-        }
-    },
-    "list_dir": {
-        "func": list_dir,
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": "list_dir",
-                "description": "列出指定目录下的文件和文件夹",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"path": {"type": "string", "description": "目录路径，默认为当前目录"}},
-                    "required": []
-                }
-            }
-        }
-    }
-}
+                logging.info(f"✅ 加载 Skill (py): {name}")
+        except Exception as e:
+            logging.error(f"加载 Skill {py_file} 失败: {e}")
+
+    # 2. 加载 .md 文件 → 共享知识
+    for md_file in glob.glob(os.path.join(skills_dir, "*.md")):
+        try:
+            with open(md_file, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                shared_knowledge += f"\n\n### 来自 {os.path.basename(md_file)} ###\n{content}"
+            logging.info(f"✅ 加载知识 (md): {os.path.basename(md_file)}")
+        except Exception as e:
+            logging.error(f"加载知识 {md_file} 失败: {e}")
+
+    return tool_registry, shared_knowledge
+
 
 # ====================== Agent 类 ======================
 class Agent:
-    def __init__(self, config: Dict, default_model: str, default_max_tokens: int):
+    def __init__(self, config: Dict, default_model: str, default_max_tokens: int, tool_registry: Dict, shared_knowledge: str = ""):
         self.name = config["name"]
         self.role = config["role"]
-        
+        self.shared_knowledge = shared_knowledge
+
         self.client = OpenAI(
             api_key=config.get("api_key"),
             base_url=config.get("base_url")
@@ -98,30 +65,24 @@ class Agent:
         self.temperature = config.get("temperature", 0.7)
         self.stream = config.get("stream", False)
         self.max_tokens = config.get("max_tokens", default_max_tokens)
-        
+
+        # 工具（只启用 yaml 中声明的）
         enabled = config.get("enabled_tools", [])
-        self.tools = [DEFAULT_TOOLS[name]["schema"] for name in enabled if name in DEFAULT_TOOLS]
-        self.tool_map: Dict[str, Callable] = {name: DEFAULT_TOOLS[name]["func"] for name in enabled if name in DEFAULT_TOOLS}
+        self.tools = [tool_registry[name]["schema"] for name in enabled if name in tool_registry]
+        self.tool_map: Dict[str, Callable] = {name: tool_registry[name]["func"] for name in enabled if name in tool_registry}
 
     def _execute_tool(self, tool_call) -> Dict:
         func_name = tool_call.function.name
         try:
             args = json.loads(tool_call.function.arguments)
-            func = self.tool_map.get(func_name)
-            if func:
-                result = func(**args)
-                return {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": func_name,
-                    "content": str(result)
-                }
+            result = self.tool_map[func_name](**args)
+            return {"role": "tool", "tool_call_id": tool_call.id, "name": func_name, "content": str(result)}
         except Exception as e:
             return {"role": "tool", "tool_call_id": tool_call.id, "name": func_name, "content": f"Tool error: {str(e)}"}
-        return {"role": "tool", "content": "Tool not found"}
 
     def generate_response(self, history: List[Dict], round_num: int) -> str:
-        messages = [{"role": "system", "content": f"{self.role}\n你是多智能体协作团队的一员，请提供有价值、准确、有深度的贡献。"}]
+        system_prompt = f"{self.role}\n{self.shared_knowledge}\n你是多智能体协作团队的一员，请提供有价值、准确、有深度的贡献。"
+        messages = [{"role": "system", "content": system_prompt}]
         for h in history:
             if h["speaker"] == "User":
                 messages.append({"role": "user", "content": h["content"]})
@@ -153,7 +114,7 @@ class Agent:
             else:
                 full_response = response.choices[0].message.content or ""
 
-            # Tool Calling（单轮，最可靠）
+            # Tool Calling（单轮）
             message_obj = response.choices[0].message
             if not self.stream and hasattr(message_obj, 'tool_calls') and message_obj.tool_calls:
                 messages.append(message_obj.model_dump())
@@ -161,8 +122,7 @@ class Agent:
                     tool_result = self._execute_tool(tool_call)
                     messages.append(tool_result)
                     logging.info(f"[{self.name}] 执行工具: {tool_call.function.name}")
-                
-                # Tool 执行后再次调用得到最终回答
+
                 final_resp = self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
@@ -171,19 +131,20 @@ class Agent:
                 )
                 full_response = final_resp.choices[0].message.content or ""
 
-            logging.info(f"[Round {round_num}] {self.name} 完成贡献")
+            logging.info(f"[Round {round_num}] {self.name} 完成")
             return full_response.strip()
 
         except Exception as e:
-            err_msg = f"[Error in {self.name}]: {str(e)}"
-            logging.error(err_msg)
-            return err_msg
+            err = f"[Error in {self.name}]: {str(e)}"
+            logging.error(err)
+            return err
+
 
 # ====================== 主类 ======================
 class MultiAgentSwarm:
     def __init__(self, config_path: str = "swarm_config.yaml"):
         if not os.path.exists(config_path):
-            raise FileNotFoundError(f"配置文件不存在: {config_path}（请根据下方示例创建）")
+            raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
         with open(config_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
@@ -196,33 +157,32 @@ class MultiAgentSwarm:
         self.num_agents = swarm.get("num_agents", 4)
         self.max_rounds = swarm.get("max_rounds", 3)
         self.log_file = swarm.get("log_file", "swarm.log")
+        self.skills_dir = swarm.get("skills_dir", "skill")   # ← 新增
 
         # 日志
-        logging.basicConfig(
-            filename=self.log_file,
-            level=logging.INFO,
-            format="%(asctime)s | %(levelname)s | %(message)s",
-            encoding="utf-8",
-            force=True
-        )
-        console = logging.StreamHandler()
-        console.setLevel(logging.INFO)
-        logging.getLogger().addHandler(console)
+        logging.basicConfig(filename=self.log_file, level=logging.INFO,
+                            format="%(asctime)s | %(levelname)s | %(message)s",
+                            encoding="utf-8", force=True)
+        logging.getLogger().addHandler(logging.StreamHandler())
 
-        logging.info("=== MultiAgentSwarm v2.1 初始化完成 ===")
+        logging.info("=== MultiAgentSwarm v2.2 (Skill 独立目录) 初始化 ===")
 
+        # 动态加载 Skill
+        self.tool_registry, self.shared_knowledge = load_skills(self.skills_dir)
+        logging.info(f"共加载 {len(self.tool_registry)} 个可执行 Skill，知识库长度 {len(self.shared_knowledge)} 字符")
+
+        # 加载 Agent
         self.agents: List[Agent] = []
         for a_cfg in cfg.get("agents", [])[:self.num_agents]:
-            agent = Agent(a_cfg, self.default_model, self.default_max_tokens)
+            agent = Agent(a_cfg, self.default_model, self.default_max_tokens,
+                          self.tool_registry, self.shared_knowledge)
             self.agents.append(agent)
-            logging.info(f"✅ Agent 加载: {agent.name} | Model: {agent.model} | max_tokens: {agent.max_tokens} | Stream: {agent.stream}")
+            logging.info(f"✅ Agent 加载: {agent.name} | Model: {agent.model} | max_tokens: {agent.max_tokens}")
 
-        if not self.agents:
-            raise ValueError("至少需要配置 1 个 Agent")
         self.leader = self.agents[0]
 
     def solve(self, task: str) -> str:
-        logging.info(f"【新任务启动】{task}")
+        logging.info(f"【新任务】{task}")
         history: List[Dict] = [{"speaker": "User", "content": task}]
 
         for r in range(1, self.max_rounds + 1):
@@ -235,23 +195,19 @@ class MultiAgentSwarm:
                         contribution = future.result()
                         history.append({"speaker": agent.name, "content": contribution})
                     except Exception as e:
-                        logging.error(f"{agent.name} 执行异常: {e}")
+                        logging.error(f"{agent.name} 异常: {e}")
 
-        # Leader 最终综合
         logging.info("--- Leader 最终综合 ---")
-        history.append({"speaker": "System", "content": "请综合以上所有智能体的讨论，给出最准确、最完整、最优的最终答案。"})
-        
+        history.append({"speaker": "System", "content": "请综合以上全部讨论，给出最准确、最完整、最优的最终答案。"})
         final_answer = self.leader.generate_response(history, self.max_rounds + 1)
 
         print("\n" + "="*90)
         print("🎯 【最终答案】")
         print(final_answer)
         print("="*90)
-
-        logging.info("✅ 任务完成")
         return final_answer
 
 
 if __name__ == "__main__":
     swarm = MultiAgentSwarm()
-    swarm.solve("请帮我写一篇关于「人工智能如何改变软件开发」的深度分析报告，并保存到 ./reports/ai_impact_report.md")
+    swarm.solve("请读取 skill/knowledge.md 中的内容，然后帮我写一篇关于人工智能的短文，并保存到 ./output/ai_essay.md")
