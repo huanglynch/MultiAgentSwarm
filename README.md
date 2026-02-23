@@ -157,6 +157,81 @@ swarm.solve("简单总结一下 Grok 4.2 的多智能体设计思路")
 
 ---
 
+## Code Review 使用专区（v2.3 特别推荐）
+
+**是的，这个 Swarm 天生就是做高质量 Code Review 的神器！**  
+开启 **智能模式** 后，效果远超单个 LLM，能实现多视角、迭代式、极致详细的代码审查（支持“凑字数”长篇报告）。
+
+### 为什么特别适合 Code Review？
+- **4 个智能体并行**：同时从安全、性能、架构、可读性、扩展性等不同角度审查
+- **智能迭代**：Leader 每轮自动打分（1-10）、给出改进建议，直到质量达到最高（通常 9~10 分）
+- **支持文件读写**：直接读取你的代码文件，审查完还能自动生成修复版或完整报告
+- **输出极详细**：问题分级（高/中/低）、风险评分、修复代码片段、整体总结、改进后完整代码
+- **安全无死循环**：硬上限 10~15 轮
+
+### 推荐 Code Review 配置（直接复制替换 swarm_config.yaml 中的 agents 部分）
+
+```yaml
+swarm:
+  mode: "intelligent"      # ← 必须用 intelligent
+  num_agents: 4
+  max_rounds: 12           # 可调到 12~15，追求极致深度
+
+agents:
+  - name: Grok
+    role: "你是首席代码审查官（Leader），负责统筹、打分、最终输出结构化长篇报告。风格专业、严谨、建设性、极度详细。"
+    api_key: "..."
+    base_url: "..."
+    model: "gpt-4o"
+    temperature: 0.7
+    stream: true
+    max_tokens: 8192
+    enabled_tools: ["read_file", "write_file", "list_dir"]
+
+  - name: Harper
+    role: "你是架构与设计审查专家，专注代码结构、设计模式、可扩展性、可维护性、未来演进建议。"
+    enabled_tools: ["read_file"]
+
+  - name: Benjamin
+    role: "你是安全与性能审查专家，专注漏洞、SQL注入、XSS、性能瓶颈、并发问题、内存/CPU 优化。"
+    enabled_tools: ["read_file"]
+
+  - name: Lucas
+    role: "你是代码规范与可读性专家，专注 PEP8、命名规范、注释、测试覆盖率、重构建议、Clean Code 原则。"
+    enabled_tools: ["read_file", "write_file"]
+```
+
+### Code Review 使用示例
+
+```python
+from multi_agent_swarm_v2 import MultiAgentSwarm
+swarm = MultiAgentSwarm()
+
+# 示例1：审查单个文件（最常用）
+review = swarm.solve("请对文件 ./code/my_app.py 进行全面代码审查。要求：1. 列出所有问题并分级（高/中/低）；2. 给出每个问题的修复代码片段；3. 输出改进后的完整版本并保存到 ./review/fixed_my_app.py；4. 最后给出整体评分（1-10分）和详细改进总结。")
+
+# 示例2：直接粘贴代码片段审查
+review = swarm.solve("""
+请对以下代码进行深度 Code Review（要求输出 3000+ 字详细报告）：
+
+```python
+def process_user_data(data):
+    # 这里粘贴你的代码
+    ...
+```
+""")
+
+# 示例3：审查整个项目目录
+review = swarm.solve("先用 list_dir 列出 ./src/ 目录所有 .py 文件，然后逐个进行代码审查，最后输出一份完整的项目审查报告（包含优先级排序和重构路线图）。")
+```
+
+**想让 review 更长、更详细？**  
+- 把 `max_rounds` 设为 15  
+- 在 Leader 的 role 里加上“输出必须非常详细、举例充分、包含多角度分析和最佳实践对比”  
+- 智能模式下会自动迭代，直到 Leader 满意为止
+
+---
+
 ## 工作流程（透明说明）
 
 ### 固定模式（mode: "fixed"）
@@ -164,16 +239,12 @@ swarm.solve("简单总结一下 Grok 4.2 的多智能体设计思路")
 2. **固定轮次**（默认 3 轮）并行让所有 Agent 同时贡献
 3. Leader 进行最终综合 → 输出答案
 
-**特点**：速度快、成本低、行为完全可预测。
-
-### 智能模式（mode: "intelligent"）← v2.3 核心新功能
+### 智能模式（mode: "intelligent"）← v2.3 核心
 1. 第 1 轮并行贡献
 2. **Leader 智能评价**（自动输出结构化 JSON：quality_score 1-10、decision "continue/stop"、reason、suggestions）
 3. 如果 Leader 判断质量已足够高（通常 score ≥8 且 decision=stop）→ 立即停止并输出最终最高质量答案
 4. 否则根据 suggestions 继续下一轮（所有 Agent 会自动看到改进方向，继续迭代）
 5. **安全上限**：达到 `max_rounds`（默认 10）时强制结束
-
-**特点**：真正“力求获取最好的最高质量输出”，自动自我改进，像真实团队 brainstorm 一样持续优化。
 
 **绝对不会死循环**：无论哪种模式都有硬性轮次上限 + 完整日志记录。
 
@@ -182,36 +253,9 @@ swarm.solve("简单总结一下 Grok 4.2 的多智能体设计思路")
 ## 如何添加新 Skill（30 秒搞定）
 
 1. 在 `skill/` 目录新建 `my_new_skill.py`
-2. 复制下面模板：
-
-```python
-def execute(param1: str, param2: int = 10) -> str:
-    """你的工具逻辑"""
-    return f"执行成功！param1={param1}, param2={param2}"
-
-schema = {
-    "type": "function",
-    "function": {
-        "name": "my_new_skill",
-        "description": "我的自定义工具描述",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "param1": {"type": "string", "description": "参数1"},
-                "param2": {"type": "integer", "description": "参数2"}
-            },
-            "required": ["param1"]
-        }
-    }
-}
-```
-
-3. 在任意 Agent 的 `enabled_tools` 列表里加上 `"my_new_skill"`
+2. 复制下面模板（略，与之前相同）
+3. 在任意 Agent 的 `enabled_tools` 列表里加上名称
 4. 重启程序即可使用！
-
-**支持格式**：
-- `.py` → 自动转为 Tool Calling（必须有 `execute` 函数 + `schema`）
-- `.md` → 全部内容自动合并为团队共享知识库，注入每个 Agent 的 System Prompt
 
 ---
 
@@ -220,12 +264,12 @@ schema = {
 - **切换模式**：只需修改 `swarm.mode` 为 `fixed` 或 `intelligent`
 - **调整质量追求**：智能模式下把 `max_rounds` 设为 15~20 可获得更高品质（但 token 消耗也会增加）
 - **流式输出**：每个 Agent 可独立开启，Leader 在最终综合时会更清晰地流式显示
-- **费用提醒**：智能模式通常消耗更多 token，请根据任务复杂度选择模式
+- **费用提醒**：智能模式 + Code Review 通常消耗更多 token，请根据任务复杂度选择
 - **日志查看**：每次运行后查看 `swarm.log`，可追溯每一轮、每个 Agent、每个 Tool 调用
 - **推荐用法**：
   - 快速验证 / 简单任务 → `fixed`
-  - 深度分析 / 报告 / 代码生成 / 需要最高质量 → `intelligent`
-- **目录建议**：把 `reports/`、`output/` 加入 `.gitignore`
+  - 深度分析 / 报告 / **Code Review** / 需要最高质量 → `intelligent`
+- **目录建议**：把 `reports/`、`output/`、`review/` 加入 `.gitignore`
 
 ---
 
