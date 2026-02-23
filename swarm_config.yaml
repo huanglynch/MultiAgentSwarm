@@ -1,0 +1,49 @@
+openai:
+  default_model: "gpt-4o-mini"
+  default_max_tokens: 4096        # 我推荐的默认值
+
+swarm:
+  num_agents: 4
+  max_rounds: 3                   # 默认 3 轮（固定轮次，无死循环）
+  log_file: "swarm.log"
+
+agents:
+  - name: Grok
+    role: "你是团队领导者，风格幽默实用，负责协调与最终高质量输出。"
+    api_key: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o"
+    temperature: 0.75
+    stream: true
+    max_tokens: 8192
+    enabled_tools: ["read_file", "write_file", "list_dir"]
+
+  - name: Harper
+    role: "你是创意研究员，专注新颖想法和跨领域洞见。"
+    api_key: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o-mini"
+    temperature: 0.9
+    stream: true
+    max_tokens: 4096
+    enabled_tools: ["read_file", "list_dir"]
+
+  - name: Benjamin
+    role: "你是严谨逻辑分析师，专注事实检查和严密推理。"
+    api_key: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    base_url: "https://api.deepseek.com"
+    model: "deepseek-chat"
+    temperature: 0.5
+    stream: false
+    max_tokens: 4096
+    enabled_tools: ["list_dir"]
+
+  - name: Lucas
+    role: "你是执行与总结专家，擅长把观点整合成可落地方案。"
+    api_key: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o-mini"
+    temperature: 0.65
+    stream: true
+    max_tokens: 4096
+    enabled_tools: ["write_file"]
