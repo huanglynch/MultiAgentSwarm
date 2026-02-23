@@ -6,6 +6,7 @@ swarm:
   num_agents: 4
   max_rounds: 3                   # 默认 3 轮（固定轮次，无死循环）
   log_file: "swarm.log"
+  skills_dir: "skills"
 
 agents:
   - name: Grok
