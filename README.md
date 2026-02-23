@@ -232,6 +232,60 @@ review = swarm.solve("先用 list_dir 列出 ./src/ 目录所有 .py 文件，�
 
 ---
 
+## Bug Investigation 使用专区（v2.3 新增 · 强烈推荐）
+
+**是的，这个 Swarm 非常适合做 Bug 调查与根因分析（Root Cause Analysis）！**
+
+尤其是智能模式下，多智能体能从日志、代码、假设、环境等多维度并行调查，自动迭代直到确认根因，输出极详细的结构化报告。
+
+### 为什么特别适合？
+- 并行多视角（日志分析、代码审查、假设生成、修复验证）
+- 智能迭代：Leader 每轮打分 + 建议下一步，直到质量最高
+- 直接读写文件：轻松处理日志、stack trace、源码、config
+- 输出极详尽：复现步骤、证据链、概率排序、修复 patch、回归测试建议
+
+### 推荐 Bug Investigation 配置
+
+```yaml
+swarm:
+  mode: "intelligent"
+  max_rounds: 15
+
+agents:
+  - name: Grok
+    role: "你是首席 Bug 调查官（Leader），负责统筹线索、构建证据链、最终输出极详细结构化报告。"
+    stream: true
+    max_tokens: 8192
+    enabled_tools: ["read_file", "write_file", "list_dir"]
+
+  - name: Harper
+    role: "假设生成与创新调查专家，专注多种可能根因和隐藏关联。"
+    enabled_tools: ["read_file"]
+
+  - name: Benjamin
+    role: "证据验证与日志分析专家，专注时间线、并发、竞态条件。"
+    enabled_tools: ["read_file"]
+
+  - name: Lucas
+    role: "修复与验证专家，专注最小 patch、可复现测试、风险评估。"
+    enabled_tools: ["read_file", "write_file"]
+```
+
+### 使用示例
+
+```python
+# 示例1：日志 + 代码联合调查
+swarm.solve("请调查登录失败 Bug（ERR-401）。已提供 ./logs/app.log 和 ./src/auth.py。请输出完整报告并保存到 ./bug_reports/ERR-401.md")
+
+# 示例2：直接贴错误信息
+swarm.solve("请调查以下 TypeError 根因并给出修复：（贴 traceback）")
+
+# 示例3：项目级调查
+swarm.solve("列出 ./src/ 最近修改文件，读取 error.log，输出完整 Bug 调查报告。")
+```
+
+**想让报告更长更详细？** 把 `max_rounds` 调高 + 在 Grok role 中强调“极度详尽、多表格、多代码片段”即可。
+
 ## 工作流程（透明说明）
 
 ### 固定模式（mode: "fixed"）
