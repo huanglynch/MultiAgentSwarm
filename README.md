@@ -70,8 +70,10 @@ swarm:
   mode: "intelligent"               # ← 新增！"fixed" 或 "intelligent"
   num_agents: 4                     # 默认智能体数量（可配置 2~20）
   max_rounds: 10                    # fixed 模式默认 3，intelligent 模式默认 10（安全上限）
+  memory_file: "memory.json"      # 新增
+  max_memory_items: 50            # 新增
   log_file: "swarm.log"
-  skills_dir: "skill"               # Skill 目录路径
+  skills_dir: "skills"               # Skill 目录路径
 
 agents:
   - name: Grok
@@ -142,6 +144,20 @@ print("\n=== 最终答案 ===")
 print(answer)
 ```
 
+```python
+from multi_agent_swarm_v2 import MultiAgentSwarm
+swarm = MultiAgentSwarm()
+
+# 普通调用
+answer = swarm.solve("你的任务")
+
+# 带记忆调用
+answer = swarm.solve(
+    task="继续上次的 Bug 调查",
+    use_memory=True,
+    memory_key="login_bug"   # 按主题分组记忆
+)
+```
 ---
 
 ## 示例任务（直接复制使用）
