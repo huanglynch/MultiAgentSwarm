@@ -7,6 +7,11 @@ swarm:
   num_agents: 4
   max_rounds: 12
   reflection_planning: true
+  # ✅ 新增：多轮反思配置
+  max_reflection_rounds: 3          # 每轮最多反思次数
+  reflection_quality_threshold: 9   # 立即停止反思的质量线
+  stop_quality_threshold: 8         # 停止整体讨论的质量线
+  quality_convergence_delta: 0.5    # 收敛判定阈值
   enable_web_search: false
   max_images: 2                    # 新增：最多支持2张图片
   memory_file: "memory.json"

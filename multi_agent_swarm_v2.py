@@ -456,6 +456,11 @@ class MultiAgentSwarm:
         self.memory_file = swarm.get("memory_file", "memory.json")
         self.max_memory_items = swarm.get("max_memory_items", 50)
 
+        self.max_reflection_rounds = swarm.get("max_reflection_rounds", 3)
+        self.reflection_quality_threshold = swarm.get("reflection_quality_threshold", 9)
+        self.stop_quality_threshold = swarm.get("stop_quality_threshold", 8)
+        self.quality_convergence_delta = swarm.get("quality_convergence_delta", 0.5)
+
         # 日志配置
         logging.basicConfig(
             filename=self.log_file,
@@ -679,13 +684,13 @@ class MultiAgentSwarm:
                             "content": f"[执行失败: {str(e)}]"
                         })
 
-            # Reflection + Planning（仅在 intelligent 模式下）
+            # ✅✅✅ Reflection + Planning（多轮反思优化版）✅✅✅
             if self.mode == "intelligent" and self.reflection_planning:
                 logging.info(f"\n{'─' * 80}")
-                logging.info(f"🤔 Leader Reflection + Planning (第 {round_num} 轮)")
+                logging.info(f"🤔 Leader Multi-Round Reflection (第 {round_num} 轮)")
                 logging.info(f"{'─' * 80}")
 
-                # Planning
+                # Planning（保持不变）
                 plan_prompt = (
                     "请以 JSON 格式规划下一轮的重点方向。\n"
                     "格式: {\"focus_areas\": [\"方向1\", \"方向2\"], \"expected_improvement\": \"预期改进\"}"
@@ -697,43 +702,111 @@ class MultiAgentSwarm:
                 )
                 logging.info(f"📋 Plan: {plan[:200]}...")
 
-                # Reflection
-                reflect_prompt = (
-                    "请反思本轮讨论结果，给出质量评分和决策。\n"
-                    "JSON 格式: {\"quality_score\": 1-10, \"decision\": \"continue/stop\", "
-                    "\"reason\": \"原因\", \"suggestions\": [\"建议1\", \"建议2\"]}"
-                )
-                leader_eval = self.leader.generate_response(
-                    history + [{"speaker": "System", "content": reflect_prompt}],
-                    round_num,
-                    force_non_stream=True
-                )
+                # ✅ 多轮反思循环（新增核心逻辑）
+                max_reflection_rounds = 3  # 最多3轮反思
+                final_decision = "continue"
+                final_quality = 0
+                previous_quality = 0  # 用于检测收敛
 
-                logging.info(f"🔍 Reflection: {leader_eval[:200]}...")
+                for reflection_round in range(1, max_reflection_rounds + 1):
+                    logging.info(f"\n🔍 Reflection Round {reflection_round}/{max_reflection_rounds}")
 
-                # 解析决策
-                try:
-                    eval_json = json.loads(
-                        leader_eval.strip()
-                        .replace("```json", "")
-                        .replace("```", "")
-                        .strip()
+                    # 构建反思提示（随轮次深化）
+                    if reflection_round == 1:
+                        reflect_prompt = (
+                            "请反思本轮讨论结果，给出质量评分和决策。\n"
+                            "评估标准：\n"
+                            "- 信息完整性（是否覆盖关键点）\n"
+                            "- 逻辑严密性（是否有矛盾或跳跃）\n"
+                            "- 深度与洞察（是否有独到见解）\n"
+                            "JSON 格式: {\"quality_score\": 1-10, \"decision\": \"continue/stop\", "
+                            "\"reason\": \"原因\", \"suggestions\": [\"建议1\", \"建议2\"]}"
+                        )
+                    elif reflection_round == 2:
+                        reflect_prompt = (
+                            f"这是第 {reflection_round} 次深度反思。\n"
+                            f"上次评分：{final_quality}/10\n"
+                            f"上次建议：已在讨论中部分体现\n\n"
+                            "请更深入地分析：\n"
+                            "- 是否还有隐藏的逻辑漏洞？\n"
+                            "- 论据是否充分支撑结论？\n"
+                            "- 表达是否清晰易懂？\n"
+                            "JSON 格式: {\"quality_score\": 1-10, \"decision\": \"continue/stop\", "
+                            "\"reason\": \"原因\", \"critical_issues\": [\"关键问题1\", \"关键问题2\"]}"
+                        )
+                    else:  # reflection_round == 3
+                        reflect_prompt = (
+                            f"这是第 {reflection_round} 次（最终）反思。\n"
+                            f"上次评分：{final_quality}/10\n"
+                            f"质量提升幅度：{final_quality - previous_quality if previous_quality > 0 else 'N/A'}\n\n"
+                            "请做最终综合判断：\n"
+                            "- 当前质量是否达到可交付标准？\n"
+                            "- 继续讨论的边际收益如何？\n"
+                            "- 是否存在致命缺陷必须修复？\n"
+                            "JSON 格式: {\"quality_score\": 1-10, \"decision\": \"continue/stop\", "
+                            "\"reason\": \"原因\", \"final_verdict\": \"综合评价\"}"
+                        )
+
+                    leader_eval = self.leader.generate_response(
+                        history + [{"speaker": "System", "content": reflect_prompt}],
+                        round_num,
+                        force_non_stream=True
                     )
 
-                    quality_score = eval_json.get("quality_score", 0)
-                    decision = eval_json.get("decision", "").lower()
+                    logging.info(f"💭 Reflection {reflection_round}: {leader_eval[:150]}...")
 
-                    logging.info(f"📊 质量评分: {quality_score}/10")
-                    logging.info(f"🎯 决策: {decision}")
+                    # 解析评估结果
+                    try:
+                        eval_json = json.loads(
+                            leader_eval.strip()
+                            .replace("```json", "")
+                            .replace("```", "")
+                            .strip()
+                        )
 
-                    if decision == "stop" and quality_score >= 8:
-                        logging.info("✅ Leader 判断已达最高质量，停止讨论")
-                        break
+                        previous_quality = final_quality  # 保存上一轮评分
+                        final_quality = eval_json.get("quality_score", 0)
+                        final_decision = eval_json.get("decision", "").lower()
 
-                except json.JSONDecodeError:
-                    logging.warning("⚠️ 无法解析 Reflection JSON，继续下一轮")
-                except Exception as e:
-                    logging.error(f"❌ Reflection 处理失败: {e}")
+                        logging.info(f"📊 质量评分: {final_quality}/10 | 决策: {final_decision}")
+
+                        # ✅ 提前终止条件1：质量极高
+                        if final_quality >= 9:
+                            logging.info(f"✅ 质量达到 {final_quality}/10，无需继续反思")
+                            break
+
+                        # ✅ 提前终止条件2：明确停止信号
+                        if final_decision == "stop" and final_quality >= 8:
+                            logging.info(f"✅ Leader 判断质量 {final_quality}/10 可接受，停止反思")
+                            break
+
+                        # ✅ 提前终止条件3：质量收敛（增幅 < 0.5）
+                        if reflection_round > 1 and previous_quality > 0:
+                            quality_delta = final_quality - previous_quality
+                            if abs(quality_delta) < 0.5:
+                                logging.info(
+                                    f"🔴 质量提升停滞 (Δ={quality_delta:.1f})，停止反思"
+                                )
+                                break
+
+                    except json.JSONDecodeError:
+                        logging.warning(f"⚠️ 反思 {reflection_round} JSON 解析失败，使用默认值")
+                        final_quality = max(final_quality, 5)  # 保底分数
+                        continue
+                    except Exception as e:
+                        logging.error(f"❌ 反思 {reflection_round} 处理失败: {e}")
+                        continue
+
+                # ✅ 最终决策（基于多轮反思的累积结果）
+                if final_decision == "stop" and final_quality >= 8:
+                    logging.info(
+                        f"🎯 经过 {reflection_round} 轮反思，质量达到 {final_quality}/10，停止讨论"
+                    )
+                    break
+                else:
+                    logging.info(
+                        f"🔄 质量 {final_quality}/10，继续下一轮讨论优化"
+                    )
 
         # 最终综合
         logging.info(f"\n{'=' * 80}")
