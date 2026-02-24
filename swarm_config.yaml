@@ -7,6 +7,7 @@ swarm:
   memory_file: "memory.json"      # ← 新增
   max_memory_items: 50            # ← 新增，保留最近 50 条记忆
   max_rounds: 10               # fixed 模式默认 3，intelligent 模式默认 10（安全上限）
+  reflection_planning: true
   num_agents: 4
   log_file: "swarm.log"
   skills_dir: "skills"
