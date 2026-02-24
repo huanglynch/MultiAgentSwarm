@@ -32,7 +32,7 @@ agents:
     temperature: 0.9
     stream: true
     max_tokens: 4096
-    enabled_tools: ["read_file", "list_dir"]
+    enabled_tools: ["read_file", "list_dir", "web_search"]
 
   - name: Benjamin
     role: "你是严谨逻辑分析师，专注事实检查和严密推理。"
