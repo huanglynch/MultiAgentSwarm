@@ -1,17 +1,16 @@
 openai:
   default_model: "gpt-4o-mini"
-  default_max_tokens: 4096        # 我推荐的默认值
+  default_max_tokens: 4096
 
 swarm:
-  mode: "intelligent"          # ← 新增！固定用 "fixed"，追求最高质量用 "intelligent"
-  memory_file: "memory.json"      # ← 新增
-  max_memory_items: 50            # ← 新增，保留最近 50 条记忆
-  max_rounds: 10               # fixed 模式默认 3，intelligent 模式默认 10（安全上限）
-  reflection_planning: true
-  enable_web_search: false
+  mode: "intelligent"
   num_agents: 4
-  log_file: "swarm.log"
-  skills_dir: "skills"
+  max_rounds: 12
+  reflection_planning: true        # 开启真正的 Plan-Act-Reflect 循环
+  enable_web_search: false
+  memory_file: "memory.json"
+  max_memory_items: 50
+  skills_dir: "skills"             # 已改为复数
 
 agents:
   - name: Grok
@@ -32,7 +31,7 @@ agents:
     temperature: 0.9
     stream: true
     max_tokens: 4096
-    enabled_tools: ["read_file", "list_dir", "web_search"]
+    enabled_tools: ["read_file", "list_dir"]
 
   - name: Benjamin
     role: "你是严谨逻辑分析师，专注事实检查和严密推理。"
