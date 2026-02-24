@@ -18,6 +18,80 @@ from datetime import datetime
 import chromadb
 from chromadb.utils import embedding_functions
 from duckduckgo_search import DDGS
+# ====================== 时间统计工具 ======================
+from contextlib import contextmanager
+from datetime import datetime
+import time
+
+
+class TimeTracker:
+    """时间统计工具类"""
+
+    def __init__(self):
+        self.start_time = None
+        self.checkpoints = {}
+
+    def start(self):
+        """开始计时"""
+        self.start_time = time.time()
+        return self.start_time
+
+    def checkpoint(self, name: str):
+        """记录检查点"""
+        if self.start_time is None:
+            self.start()
+        elapsed = time.time() - self.start_time
+        self.checkpoints[name] = elapsed
+        return elapsed
+
+    def get_elapsed(self) -> float:
+        """获取总耗时"""
+        if self.start_time is None:
+            return 0
+        return time.time() - self.start_time
+
+    def format_time(self, seconds: float) -> str:
+        """格式化时间显示"""
+        if seconds < 60:
+            return f"{seconds:.2f}秒"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            secs = seconds % 60
+            return f"{minutes}分{secs:.1f}秒"
+        else:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            secs = seconds % 60
+            return f"{hours}小时{minutes}分{secs:.0f}秒"
+
+    def summary(self) -> str:
+        """生成耗时摘要"""
+        total = self.get_elapsed()
+        lines = [f"\n{'=' * 60}"]
+        lines.append(f"⏱️  总耗时: {self.format_time(total)}")
+        lines.append(f"{'─' * 60}")
+
+        if self.checkpoints:
+            lines.append("📊 各阶段耗时:")
+            for name, elapsed in self.checkpoints.items():
+                percentage = (elapsed / total * 100) if total > 0 else 0
+                lines.append(f"   {name}: {self.format_time(elapsed)} ({percentage:.1f}%)")
+
+        lines.append(f"{'=' * 60}")
+        return "\n".join(lines)
+
+@contextmanager
+def timer(description: str):
+    """上下文管理器：自动计时并打印"""
+    start = time.time()
+    print(f"⏱️  开始: {description}", flush=True)
+    try:
+        yield
+    finally:
+        elapsed = time.time() - start
+        print(f"✅ 完成: {description} | 耗时: {TimeTracker().format_time(elapsed)}", flush=True)
+
+
 
 # ====================== 线程安全的工具缓存 ======================
 tool_cache = {}
@@ -345,6 +419,9 @@ class Agent:
         生成响应
         注意：图像已在 history 中，无需单独传递
         """
+        # ✅ 添加计时
+        start_time = time.time()
+
         use_stream = self.stream and not force_non_stream and not self.tools
 
         # 构建系统提示词
@@ -352,7 +429,7 @@ class Agent:
             f"{self.role}\n"
             f"{self.shared_knowledge}\n"
             f"{system_extra}\n"
-            "你是多智能体协作团队的一员，请提供有价值、准确、有深度的贡献。"
+            "你是多智能体协作团队的一员,请提供有价值、准确、有深度的贡献。"
         )
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -419,11 +496,22 @@ class Agent:
                 )
                 full_response = final_resp.choices[0].message.content or ""
 
+            # ✅ 计算并显示耗时
+            elapsed = time.time() - start_time
+            elapsed_str = f"{elapsed:.2f}秒" if elapsed < 60 else f"{int(elapsed // 60)}分{elapsed % 60:.1f}秒"
+
+            if not use_stream:
+                print(f"⏱️  【{self.name}】响应完成 | 耗时: {elapsed_str}")
+
+            logging.info(f"⏱️  {self.name} 响应耗时: {elapsed_str}")
+
             return full_response.strip()
 
         except Exception as e:
+            elapsed = time.time() - start_time
             err = f"[Error in {self.name}]: {str(e)}"
-            logging.error(err)
+            logging.error(f"{err} | 耗时: {elapsed:.2f}秒")
+            print(f"❌ 【{self.name}】执行失败 | 耗时: {elapsed:.2f}秒")
             return err
 
 
@@ -580,11 +668,19 @@ class MultiAgentSwarm:
         Returns:
             最终答案
         """
+        # ✅ 初始化时间追踪器
+        tracker = TimeTracker()
+        tracker.start()
+
         logging.info(f"\n{'=' * 80}")
         logging.info(f"📋 新任务: {task}")
         logging.info(f"   记忆模式: {use_memory} | Key: {memory_key}")
         logging.info(f"   图片数量: {len(image_paths) if image_paths else 0}")
         logging.info(f"{'=' * 80}")
+
+        print(f"\n{'=' * 80}")
+        print(f"🚀 任务开始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'=' * 80}\n")
 
         # ✅ 修复：限制图片数量（使用配置）
         if image_paths:
@@ -632,6 +728,9 @@ class MultiAgentSwarm:
         else:
             history.append({"speaker": "User", "content": task})
 
+        # ✅ 记录检查点：初始化完成
+        tracker.checkpoint("1️⃣ 初始化")
+
         # 加载历史记忆
         if use_memory and memory_key in self.memory:
             memory_text = "\n".join([
@@ -656,6 +755,9 @@ class MultiAgentSwarm:
             logging.info(f"\n{'─' * 80}")
             logging.info(f"🔄 第 {round_num} 轮讨论开始")
             logging.info(f"{'─' * 80}")
+
+            # ✅ 记录轮次开始时间
+            round_start = time.time()
 
             # 并行执行所有 Agents
             with ThreadPoolExecutor(max_workers=len(self.agents)) as executor:
@@ -684,8 +786,18 @@ class MultiAgentSwarm:
                             "content": f"[执行失败: {str(e)}]"
                         })
 
+            # ✅ 记录轮次耗时
+            round_elapsed = time.time() - round_start
+            round_time_str = tracker.format_time(round_elapsed)
+            print(f"\n⏱️  第 {round_num} 轮讨论完成 | 耗时: {round_time_str}\n")
+            logging.info(f"⏱️  第 {round_num} 轮讨论耗时: {round_time_str}")
+
+            tracker.checkpoint(f"2️⃣ 第{round_num}轮讨论")
+
             # ✅✅✅ Reflection + Planning（多轮反思优化版）✅✅✅
             if self.mode == "intelligent" and self.reflection_planning:
+                reflection_start = time.time()
+
                 logging.info(f"\n{'─' * 80}")
                 logging.info(f"🤔 Leader Multi-Round Reflection (第 {round_num} 轮)")
                 logging.info(f"{'─' * 80}")
@@ -703,7 +815,7 @@ class MultiAgentSwarm:
                 logging.info(f"📋 Plan: {plan[:200]}...")
 
                 # ✅ 多轮反思循环（新增核心逻辑）
-                max_reflection_rounds = 3  # 最多3轮反思
+                max_reflection_rounds = self.max_reflection_rounds
                 final_decision = "continue"
                 final_quality = 0
                 previous_quality = 0  # 用于检测收敛
@@ -771,19 +883,19 @@ class MultiAgentSwarm:
                         logging.info(f"📊 质量评分: {final_quality}/10 | 决策: {final_decision}")
 
                         # ✅ 提前终止条件1：质量极高
-                        if final_quality >= 9:
+                        if final_quality >= self.reflection_quality_threshold:
                             logging.info(f"✅ 质量达到 {final_quality}/10，无需继续反思")
                             break
 
                         # ✅ 提前终止条件2：明确停止信号
-                        if final_decision == "stop" and final_quality >= 8:
+                        if final_decision == "stop" and final_quality >= self.stop_quality_threshold:
                             logging.info(f"✅ Leader 判断质量 {final_quality}/10 可接受，停止反思")
                             break
 
                         # ✅ 提前终止条件3：质量收敛（增幅 < 0.5）
                         if reflection_round > 1 and previous_quality > 0:
                             quality_delta = final_quality - previous_quality
-                            if abs(quality_delta) < 0.5:
+                            if abs(quality_delta) < self.quality_convergence_delta:
                                 logging.info(
                                     f"🔴 质量提升停滞 (Δ={quality_delta:.1f})，停止反思"
                                 )
@@ -797,8 +909,16 @@ class MultiAgentSwarm:
                         logging.error(f"❌ 反思 {reflection_round} 处理失败: {e}")
                         continue
 
+                # ✅ 记录反思耗时
+                reflection_elapsed = time.time() - reflection_start
+                reflection_time_str = tracker.format_time(reflection_elapsed)
+                print(f"⏱️  反思阶段完成 | 耗时: {reflection_time_str}\n")
+                logging.info(f"⏱️  反思阶段耗时: {reflection_time_str}")
+
+                tracker.checkpoint(f"3️⃣ 第{round_num}轮反思")
+
                 # ✅ 最终决策（基于多轮反思的累积结果）
-                if final_decision == "stop" and final_quality >= 8:
+                if final_decision == "stop" and final_quality >= self.stop_quality_threshold:
                     logging.info(
                         f"🎯 经过 {reflection_round} 轮反思，质量达到 {final_quality}/10，停止讨论"
                     )
@@ -808,7 +928,9 @@ class MultiAgentSwarm:
                         f"🔄 质量 {final_quality}/10，继续下一轮讨论优化"
                     )
 
-        # 最终综合
+        # ✅ 最终综合
+        final_synthesis_start = time.time()
+
         logging.info(f"\n{'=' * 80}")
         logging.info("🎯 Leader 最终综合")
         logging.info(f"{'=' * 80}")
@@ -830,6 +952,10 @@ class MultiAgentSwarm:
             round_num + 1,
             force_non_stream=False
         )
+
+        # ✅ 记录最终综合耗时
+        final_synthesis_elapsed = time.time() - final_synthesis_start
+        tracker.checkpoint("4️⃣ 最终综合")
 
         # 保存记忆
         if use_memory:
@@ -854,12 +980,18 @@ class MultiAgentSwarm:
                     metadata={"task": task[:100], "memory_key": memory_key}
                 )
 
+            tracker.checkpoint("5️⃣ 保存记忆")
+
         # 输出最终答案
         print("\n" + "=" * 100)
         print("🎯 【最终最高质量答案】")
         print("=" * 100)
         print(final_answer)
         print("=" * 100)
+
+        # ✅ 显示完整耗时统计
+        print(tracker.summary())
+        logging.info(tracker.summary())
 
         logging.info(f"\n{'=' * 80}")
         logging.info("✅ 任务完成")
