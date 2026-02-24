@@ -22,7 +22,7 @@ agents:
     temperature: 0.75
     stream: true
     max_tokens: 8192
-    enabled_tools: ["read_file", "write_file", "list_dir"]
+    enabled_tools: ["read_file", "write_file", "list_dir", "web_search"]
 
   - name: Harper
     role: "你是创意研究员，专注新颖想法和跨领域洞见。"
