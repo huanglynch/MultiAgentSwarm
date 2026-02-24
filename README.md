@@ -323,11 +323,17 @@ swarm.solve("列出 ./src/ 最近修改文件，读取 error.log，输出完整 
 
 **绝对不会死循环**：无论哪种模式都有硬性轮次上限 + 完整日志记录。
 
+## 持久化记忆机制（v2.4 新功能）
+
+作用：跨多次 solve() 调用保留关键结论和经验
+使用方式：use_memory=True, memory_key="主题名"
+存储位置：memory.json（自动创建）
+优势：高效（只存摘要）、可靠（JSON 文件）、简单（一行调用）
 ---
 
 ## 如何添加新 Skill（30 秒搞定）
 
-1. 在 `skill/` 目录新建 `my_new_skill.py`
+1. 在 `skills/` 目录新建 `my_new_skill.py`
 2. 复制下面模板（略，与之前相同）
 3. 在任意 Agent 的 `enabled_tools` 列表里加上名称
 4. 重启程序即可使用！
