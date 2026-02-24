@@ -1,0 +1,6 @@
+openai
+pyyaml
+duckduckgo-search
+beautifulsoup4
+chromadb
+requests
