@@ -3,21 +3,40 @@ openai:
   default_max_tokens: 4096
 
 swarm:
-  mode: "intelligent"
-  num_agents: 4
-  max_rounds: 12
-  reflection_planning: true
-  # ✅ 新增：多轮反思配置
-  max_reflection_rounds: 3          # 每轮最多反思次数
-  reflection_quality_threshold: 9   # 立即停止反思的质量线
-  stop_quality_threshold: 8         # 停止整体讨论的质量线
-  quality_convergence_delta: 0.5    # 收敛判定阈值
-  enable_web_search: false
-  max_images: 2                    # 新增：最多支持2张图片
-  memory_file: "memory.json"
-  max_memory_items: 50
-  skills_dir: "skills"
+  mode: "intelligent"                    # 运行模式: "fixed" 或 "intelligent"
+  num_agents: 4                          # 使用的 Agent 数量
+  max_concurrent_agents: 2               # ✅ 新增：最大并发执行的 Agent 数量（默认 2）
+  max_rounds: 12                         # 最大讨论轮次
 
+  # 反思与规划配置
+  reflection_planning: true              # 是否启用 Reflection + Planning
+  max_reflection_rounds: 3               # 每轮最多反思次数
+  reflection_quality_threshold: 9        # 立即停止反思的质量线
+  stop_quality_threshold: 8              # 停止整体讨论的质量线
+  quality_convergence_delta: 0.5         # 收敛判定阈值
+
+  # 功能开关
+  enable_web_search: false               # 是否启用网络搜索
+  max_images: 2                          # 最多支持的图片数量
+
+  # 存储配置
+  memory_file: "memory.json"             # 持久化记忆文件
+  max_memory_items: 50                   # 每个 key 最多保存的记忆条数
+  skills_dir: "skills"                   # Skills 目录
+  log_file: "swarm.log"                  # 日志文件
+
+  # ✅ 新增：向量记忆配置
+  vector_memory:
+    enabled: true                        # 是否启用向量记忆
+    persist_directory: "./memory_db"     # ChromaDB 数据库路径
+    model_cache_dir: "./cached_model/"   # ✅ 向量模型缓存目录
+    # embedding_model: "sentence-transformers/all-MiniLM-L6-v2"  # 嵌入模型
+    # embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_model: "sentence-transformers/distiluse-base-multilingual-cased-v2" # 平衡
+
+# ============================================================
+# Agent 配置
+# ============================================================
 agents:
   - name: Grok
     role: "你是团队领导者，风格幽默实用，负责协调与最终高质量输出。"

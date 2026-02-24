@@ -1,3 +1,14 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+多智能体协作系统 (Multi-Agent Swarm) v2.9.2
+- 支持并发控制（max_concurrent_agents）
+- 支持向量记忆（优先使用缓存模型）
+- 支持耗时统计
+- 支持多模态输入（文本 + 图像）
+"""
+
 import yaml
 import logging
 import os
@@ -16,12 +27,12 @@ from openai import OpenAI
 import json
 from datetime import datetime
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb.config import Settings
+from sentence_transformers import SentenceTransformer
 from duckduckgo_search import DDGS
+
 # ====================== 时间统计工具 ======================
 from contextlib import contextmanager
-from datetime import datetime
-import time
 
 
 class TimeTracker:
@@ -80,6 +91,7 @@ class TimeTracker:
         lines.append(f"{'=' * 60}")
         return "\n".join(lines)
 
+
 @contextmanager
 def timer(description: str):
     """上下文管理器：自动计时并打印"""
@@ -90,7 +102,6 @@ def timer(description: str):
     finally:
         elapsed = time.time() - start
         print(f"✅ 完成: {description} | 耗时: {TimeTracker().format_time(elapsed)}", flush=True)
-
 
 
 # ====================== 线程安全的工具缓存 ======================
@@ -217,36 +228,112 @@ def run_python(code: str) -> str:
 
 # ====================== 向量记忆 ======================
 class VectorMemory:
-    """基于 ChromaDB 的向量记忆存储"""
+    """
+    基于 ChromaDB 和 SentenceTransformer 的向量记忆系统
+    ✅ 优先使用缓存模型，避免重复下载
+    """
 
-    def __init__(self, persist_directory: str = "./memory_db"):
+    def __init__(
+            self,
+            persist_directory: str = "./memory_db",
+            model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+            cache_dir: str = "./cached_model/"
+    ):
+        """
+        初始化向量记忆系统
+
+        Args:
+            persist_directory: ChromaDB 数据库路径
+            model_name: SentenceTransformer 模型名称
+            cache_dir: 模型缓存目录（优先从此处加载）
+        """
+        self.persist_directory = persist_directory
+        self.model_name = model_name
+        self.cache_dir = os.path.abspath(cache_dir)
+
+        # 确保缓存目录存在
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        # 初始化嵌入模型（优先使用缓存）
+        self._init_embedding_model()
+
+        # 初始化 ChromaDB
+        self._init_chromadb()
+
+    def _init_embedding_model(self):
+        """初始化嵌入模型（优先从缓存加载）"""
         try:
-            self.client = chromadb.PersistentClient(path=persist_directory)
+            # 检查缓存是否存在
+            cached_model_path = os.path.join(self.cache_dir, self.model_name.replace('/', '_'))
+
+            if os.path.exists(cached_model_path):
+                logging.info(f"📦 从缓存加载向量模型: {cached_model_path}")
+                print(f"📦 从缓存加载向量模型: {self.model_name}")
+                self.embedding_model = SentenceTransformer(cached_model_path)
+            else:
+                logging.info(f"⬇️  下载向量模型: {self.model_name} → {cached_model_path}")
+                print(f"⬇️  首次使用，正在下载向量模型: {self.model_name}")
+                print(f"   下载后将缓存到: {cached_model_path}")
+
+                # 下载模型
+                self.embedding_model = SentenceTransformer(self.model_name)
+
+                # 保存到缓存
+                self.embedding_model.save(cached_model_path)
+                logging.info(f"✅ 模型已缓存到: {cached_model_path}")
+                print(f"✅ 模型已缓存，下次将直接使用")
+
+        except Exception as e:
+            logging.error(f"❌ 向量模型初始化失败: {e}")
+            raise
+
+    def _init_chromadb(self):
+        """初始化 ChromaDB 客户端"""
+        try:
+            os.makedirs(os.path.dirname(self.persist_directory) if os.path.dirname(
+                self.persist_directory) else ".", exist_ok=True)
+
+            self.client = chromadb.PersistentClient(
+                path=self.persist_directory,
+                settings=Settings(anonymized_telemetry=False)
+            )
+
+            # 获取或创建集合
             self.collection = self.client.get_or_create_collection(
                 name="swarm_memory",
-                embedding_function=embedding_functions.DefaultEmbeddingFunction()
+                metadata={"description": "Agent memory storage"}
             )
-            logging.info("✅ 向量记忆数据库初始化成功")
+
+            logging.info(f"✅ ChromaDB 初始化成功: {self.persist_directory}")
+
         except Exception as e:
-            logging.error(f"向量记忆初始化失败: {e}")
+            logging.error(f"❌ ChromaDB 初始化失败: {e}")
             self.collection = None
 
     def add(self, text: str, metadata: Optional[Dict] = None):
-        """添加记忆"""
+        """添加记忆到向量数据库"""
         if not self.collection:
             return
 
-        if not metadata:
-            metadata = {"timestamp": datetime.now().isoformat()}
-
         try:
+            # 生成嵌入向量
+            embedding = self.embedding_model.encode(text).tolist()
+
+            # 生成 ID
+            memory_id = f"mem_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+
+            # 添加到数据库
             self.collection.add(
+                ids=[memory_id],
+                embeddings=[embedding],
                 documents=[text],
-                metadatas=[metadata],
-                ids=[f"{datetime.now().timestamp()}"]
+                metadatas=[metadata or {"timestamp": datetime.now().isoformat()}]
             )
+
+            logging.info(f"✅ 记忆已保存: {memory_id}")
+
         except Exception as e:
-            logging.error(f"添加记忆失败: {e}")
+            logging.error(f"❌ 保存记忆失败: {e}")
 
     def search(self, query: str, n_results: int = 5) -> str:
         """搜索相关记忆"""
@@ -254,14 +341,21 @@ class VectorMemory:
             return ""
 
         try:
+            # 生成查询嵌入
+            query_embedding = self.embedding_model.encode(query).tolist()
+
+            # 搜索
             results = self.collection.query(
-                query_texts=[query],
+                query_embeddings=[query_embedding],
                 n_results=n_results
             )
+
+            # 格式化结果
             if results and results["documents"]:
                 return "\n\n---\n\n".join(results["documents"][0])
+
         except Exception as e:
-            logging.error(f"搜索记忆失败: {e}")
+            logging.error(f"❌ 搜索记忆失败: {e}")
 
         return ""
 
@@ -270,29 +364,20 @@ class VectorMemory:
 def load_skills(skills_dir: str = "skills"):
     """
     递归加载 skills 目录下的所有 Python 工具和 Markdown 知识文件
-    支持子目录结构，例如：
-    skills/
-    ├── file/
-    │   ├── read_file.py
-    │   └── write_file.py
-    ├── web/
-    │   └── web_search.py
-    └── knowledge/
-        └── ai_basics.md
+    支持子目录结构
     """
     tool_registry = {}
     shared_knowledge = []
 
     if not os.path.exists(skills_dir):
         logging.warning(f"⚠️ Skills 目录不存在: {skills_dir}")
-        return tool_registry, ""  # ✅ 返回空字符串
+        return tool_registry, ""
 
-    # ✅ 递归扫描所有 .py 文件
+    # 递归扫描所有 .py 文件
     py_files = glob.glob(os.path.join(skills_dir, "**/*.py"), recursive=True)
 
     for py_file in py_files:
         try:
-            # 计算相对路径用于显示
             rel_path = os.path.relpath(py_file, skills_dir)
 
             # 动态导入模块
@@ -312,12 +397,12 @@ def load_skills(skills_dir: str = "skills"):
                 }
                 logging.info(f"✅ 加载 Skill (py): {tool_name} | 来自: {rel_path}")
             else:
-                logging.warning(f"⚠️ 跳过无效 Skill 文件: {rel_path} (缺少 tool_function 或 tool_schema)")
+                logging.warning(f"⚠️ 跳过无效 Skill 文件: {rel_path}")
 
         except Exception as e:
             logging.error(f"❌ 加载 Skill 失败: {py_file} | 错误: {e}")
 
-    # ✅ 递归扫描所有 .md 文件
+    # 递归扫描所有 .md 文件
     md_files = glob.glob(os.path.join(skills_dir, "**/*.md"), recursive=True)
 
     for md_file in md_files:
@@ -331,13 +416,12 @@ def load_skills(skills_dir: str = "skills"):
         except Exception as e:
             logging.error(f"❌ 读取知识文件失败: {md_file} | 错误: {e}")
 
-    # ✅ 统计信息
     logging.info(f"📊 Skills 加载完成: {len(tool_registry)} 个工具, {len(shared_knowledge)} 个知识文件")
 
-    # ✅ 将列表合并为字符串
     shared_knowledge_str = "\n\n".join(shared_knowledge)
 
     return tool_registry, shared_knowledge_str
+
 
 # ====================== Agent 类 ======================
 class Agent:
@@ -415,11 +499,7 @@ class Agent:
             system_extra: str = "",
             force_non_stream: bool = False
     ) -> str:
-        """
-        生成响应
-        注意：图像已在 history 中，无需单独传递
-        """
-        # ✅ 添加计时
+        """生成响应"""
         start_time = time.time()
 
         use_stream = self.stream and not force_non_stream and not self.tools
@@ -429,7 +509,7 @@ class Agent:
             f"{self.role}\n"
             f"{self.shared_knowledge}\n"
             f"{system_extra}\n"
-            "你是多智能体协作团队的一员,请提供有价值、准确、有深度的贡献。"
+            "你是多智能体协作团队的一员，请提供有价值、准确、有深度的贡献。"
         )
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -439,10 +519,8 @@ class Agent:
             if h["speaker"] == "User":
                 messages.append({"role": "user", "content": h["content"]})
             elif h["speaker"] == "System":
-                # 系统消息直接添加
                 messages.append({"role": "system", "content": h["content"]})
             else:
-                # 其他 Agent 的消息作为 assistant 消息
                 messages.append({
                     "role": "assistant",
                     "content": f"[{h['speaker']}] {h.get('content', '')}"
@@ -496,7 +574,7 @@ class Agent:
                 )
                 full_response = final_resp.choices[0].message.content or ""
 
-            # ✅ 计算并显示耗时
+            # 计算并显示耗时
             elapsed = time.time() - start_time
             elapsed_str = f"{elapsed:.2f}秒" if elapsed < 60 else f"{int(elapsed // 60)}分{elapsed % 60:.1f}秒"
 
@@ -517,7 +595,7 @@ class Agent:
 
 # ====================== 主类 MultiAgentSwarm ======================
 class MultiAgentSwarm:
-    """多智能体群智慧框架"""
+    """多智能体群智慧框架 v2.9.2"""
 
     def __init__(self, config_path: str = "swarm_config.yaml"):
         if not os.path.exists(config_path):
@@ -535,6 +613,7 @@ class MultiAgentSwarm:
         swarm = cfg.get("swarm", {})
         self.mode = swarm.get("mode", "fixed")
         self.max_rounds = swarm.get("max_rounds", 3 if self.mode == "fixed" else 10)
+        self.max_concurrent_agents = swarm.get("max_concurrent_agents", 2)  # ✅ 新增
         self.reflection_planning = swarm.get("reflection_planning", True)
         self.enable_web_search = swarm.get("enable_web_search", False)
         self.max_images = swarm.get("max_images", 2)
@@ -549,6 +628,14 @@ class MultiAgentSwarm:
         self.stop_quality_threshold = swarm.get("stop_quality_threshold", 8)
         self.quality_convergence_delta = swarm.get("quality_convergence_delta", 0.5)
 
+        # ✅ 向量记忆配置
+        vector_cfg = swarm.get("vector_memory", {})
+        self.vector_memory_enabled = vector_cfg.get("enabled", False)
+        self.vector_persist_directory = vector_cfg.get("persist_directory", "./memory_db")
+        self.vector_model_cache_dir = vector_cfg.get("model_cache_dir", "./cached_model/")
+        self.vector_embedding_model = vector_cfg.get("embedding_model",
+                                                     "sentence-transformers/distiluse-base-multilingual-cased-v2")
+
         # 日志配置
         logging.basicConfig(
             filename=self.log_file,
@@ -560,9 +647,11 @@ class MultiAgentSwarm:
         logging.getLogger().addHandler(logging.StreamHandler())
 
         logging.info(f"{'=' * 80}")
-        logging.info(f"🚀 MultiAgentSwarm v2.9.1 初始化")
+        logging.info(f"🚀 MultiAgentSwarm v2.9.2 初始化")
         logging.info(f"   Mode: {self.mode} | Max Rounds: {self.max_rounds}")
+        logging.info(f"   Max Concurrent: {self.max_concurrent_agents}")  # ✅ 新增
         logging.info(f"   Reflection: {self.reflection_planning} | Web Search: {self.enable_web_search}")
+        logging.info(f"   Vector Memory: {self.vector_memory_enabled}")  # ✅ 新增
         logging.info(f"{'=' * 80}")
 
         # 加载 Skills
@@ -590,11 +679,22 @@ class MultiAgentSwarm:
             }
             logging.info("✅ 已启用网络搜索工具")
 
-        # ✅ 关键修复：先初始化持久化记忆（必须在向量记忆之前）
+        # 初始化持久化记忆（必须在向量记忆之前）
         self.memory = self._load_memory()
 
-        # 初始化向量记忆
-        self.vector_memory = VectorMemory()
+        # ✅ 初始化向量记忆
+        self.vector_memory = None
+        if self.vector_memory_enabled:
+            try:
+                self.vector_memory = VectorMemory(
+                    persist_directory=self.vector_persist_directory,
+                    model_name=self.vector_embedding_model,
+                    cache_dir=self.vector_model_cache_dir
+                )
+                logging.info("✅ 向量记忆系统初始化成功")
+            except Exception as e:
+                logging.warning(f"⚠️ 向量记忆初始化失败: {e}")
+                self.vector_memory_enabled = False
 
         # 初始化 Agents
         self.agents = []
@@ -635,10 +735,9 @@ class MultiAgentSwarm:
 
         self.memory[key].append({
             "timestamp": datetime.now().isoformat(),
-            "summary": summary[:3000]  # 限制长度
+            "summary": summary[:3000]
         })
 
-        # 限制每个 key 的记忆数量
         if len(self.memory[key]) > self.max_memory_items:
             self.memory[key] = self.memory[key][-self.max_memory_items:]
 
@@ -663,12 +762,11 @@ class MultiAgentSwarm:
             task: 任务描述
             use_memory: 是否使用持久化记忆
             memory_key: 记忆键名
-            image_paths: 图像文件路径列表（最多 max_images 张）
+            image_paths: 图像文件路径列表
 
         Returns:
             最终答案
         """
-        # ✅ 初始化时间追踪器
         tracker = TimeTracker()
         tracker.start()
 
@@ -682,15 +780,13 @@ class MultiAgentSwarm:
         print(f"🚀 任务开始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'=' * 80}\n")
 
-        # ✅ 修复：限制图片数量（使用配置）
         if image_paths:
             image_paths = image_paths[:self.max_images]
             logging.info(f"📷 处理 {len(image_paths)} 张图片")
 
-        # 初始化对话历史
         history: List[Dict] = []
 
-        # ✅ 修复：图像处理逻辑（只处理一次，放在任务描述中）
+        # 图像处理
         if image_paths:
             image_content = [{"type": "text", "text": task}]
 
@@ -700,7 +796,6 @@ class MultiAgentSwarm:
                     continue
 
                 try:
-                    # 动态检测 MIME 类型
                     mime_type, _ = mimetypes.guess_type(path)
                     if not mime_type or not mime_type.startswith("image/"):
                         mime_type = "image/jpeg"
@@ -723,12 +818,10 @@ class MultiAgentSwarm:
                         "text": f"[无法读取图片 {idx}: {os.path.basename(path)}]"
                     })
 
-            # 将图像作为用户消息的一部分
             history.append({"speaker": "User", "content": image_content})
         else:
             history.append({"speaker": "User", "content": task})
 
-        # ✅ 记录检查点：初始化完成
         tracker.checkpoint("1️⃣ 初始化")
 
         # 加载历史记忆
@@ -756,11 +849,10 @@ class MultiAgentSwarm:
             logging.info(f"🔄 第 {round_num} 轮讨论开始")
             logging.info(f"{'─' * 80}")
 
-            # ✅ 记录轮次开始时间
             round_start = time.time()
 
-            # 并行执行所有 Agents
-            with ThreadPoolExecutor(max_workers=len(self.agents)) as executor:
+            # ✅ 使用 max_concurrent_agents 限制并发数
+            with ThreadPoolExecutor(max_workers=self.max_concurrent_agents) as executor:
                 future_to_agent = {
                     executor.submit(
                         agent.generate_response,
@@ -786,7 +878,6 @@ class MultiAgentSwarm:
                             "content": f"[执行失败: {str(e)}]"
                         })
 
-            # ✅ 记录轮次耗时
             round_elapsed = time.time() - round_start
             round_time_str = tracker.format_time(round_elapsed)
             print(f"\n⏱️  第 {round_num} 轮讨论完成 | 耗时: {round_time_str}\n")
@@ -794,7 +885,7 @@ class MultiAgentSwarm:
 
             tracker.checkpoint(f"2️⃣ 第{round_num}轮讨论")
 
-            # ✅✅✅ Reflection + Planning（多轮反思优化版）✅✅✅
+            # 反思与规划
             if self.mode == "intelligent" and self.reflection_planning:
                 reflection_start = time.time()
 
@@ -802,7 +893,6 @@ class MultiAgentSwarm:
                 logging.info(f"🤔 Leader Multi-Round Reflection (第 {round_num} 轮)")
                 logging.info(f"{'─' * 80}")
 
-                # Planning（保持不变）
                 plan_prompt = (
                     "请以 JSON 格式规划下一轮的重点方向。\n"
                     "格式: {\"focus_areas\": [\"方向1\", \"方向2\"], \"expected_improvement\": \"预期改进\"}"
@@ -814,16 +904,14 @@ class MultiAgentSwarm:
                 )
                 logging.info(f"📋 Plan: {plan[:200]}...")
 
-                # ✅ 多轮反思循环（新增核心逻辑）
                 max_reflection_rounds = self.max_reflection_rounds
                 final_decision = "continue"
                 final_quality = 0
-                previous_quality = 0  # 用于检测收敛
+                previous_quality = 0
 
                 for reflection_round in range(1, max_reflection_rounds + 1):
                     logging.info(f"\n🔍 Reflection Round {reflection_round}/{max_reflection_rounds}")
 
-                    # 构建反思提示（随轮次深化）
                     if reflection_round == 1:
                         reflect_prompt = (
                             "请反思本轮讨论结果，给出质量评分和决策。\n"
@@ -846,7 +934,7 @@ class MultiAgentSwarm:
                             "JSON 格式: {\"quality_score\": 1-10, \"decision\": \"continue/stop\", "
                             "\"reason\": \"原因\", \"critical_issues\": [\"关键问题1\", \"关键问题2\"]}"
                         )
-                    else:  # reflection_round == 3
+                    else:
                         reflect_prompt = (
                             f"这是第 {reflection_round} 次（最终）反思。\n"
                             f"上次评分：{final_quality}/10\n"
@@ -867,7 +955,6 @@ class MultiAgentSwarm:
 
                     logging.info(f"💭 Reflection {reflection_round}: {leader_eval[:150]}...")
 
-                    # 解析评估结果
                     try:
                         eval_json = json.loads(
                             leader_eval.strip()
@@ -876,40 +963,34 @@ class MultiAgentSwarm:
                             .strip()
                         )
 
-                        previous_quality = final_quality  # 保存上一轮评分
+                        previous_quality = final_quality
                         final_quality = eval_json.get("quality_score", 0)
                         final_decision = eval_json.get("decision", "").lower()
 
                         logging.info(f"📊 质量评分: {final_quality}/10 | 决策: {final_decision}")
 
-                        # ✅ 提前终止条件1：质量极高
                         if final_quality >= self.reflection_quality_threshold:
                             logging.info(f"✅ 质量达到 {final_quality}/10，无需继续反思")
                             break
 
-                        # ✅ 提前终止条件2：明确停止信号
                         if final_decision == "stop" and final_quality >= self.stop_quality_threshold:
                             logging.info(f"✅ Leader 判断质量 {final_quality}/10 可接受，停止反思")
                             break
 
-                        # ✅ 提前终止条件3：质量收敛（增幅 < 0.5）
                         if reflection_round > 1 and previous_quality > 0:
                             quality_delta = final_quality - previous_quality
                             if abs(quality_delta) < self.quality_convergence_delta:
-                                logging.info(
-                                    f"🔴 质量提升停滞 (Δ={quality_delta:.1f})，停止反思"
-                                )
+                                logging.info(f"🔴 质量提升停滞 (Δ={quality_delta:.1f})，停止反思")
                                 break
 
                     except json.JSONDecodeError:
-                        logging.warning(f"⚠️ 反思 {reflection_round} JSON 解析失败，使用默认值")
-                        final_quality = max(final_quality, 5)  # 保底分数
+                        logging.warning(f"⚠️ 反思 {reflection_round} JSON 解析失败")
+                        final_quality = max(final_quality, 5)
                         continue
                     except Exception as e:
                         logging.error(f"❌ 反思 {reflection_round} 处理失败: {e}")
                         continue
 
-                # ✅ 记录反思耗时
                 reflection_elapsed = time.time() - reflection_start
                 reflection_time_str = tracker.format_time(reflection_elapsed)
                 print(f"⏱️  反思阶段完成 | 耗时: {reflection_time_str}\n")
@@ -917,18 +998,13 @@ class MultiAgentSwarm:
 
                 tracker.checkpoint(f"3️⃣ 第{round_num}轮反思")
 
-                # ✅ 最终决策（基于多轮反思的累积结果）
                 if final_decision == "stop" and final_quality >= self.stop_quality_threshold:
-                    logging.info(
-                        f"🎯 经过 {reflection_round} 轮反思，质量达到 {final_quality}/10，停止讨论"
-                    )
+                    logging.info(f"🎯 经过 {reflection_round} 轮反思，质量达到 {final_quality}/10，停止讨论")
                     break
                 else:
-                    logging.info(
-                        f"🔄 质量 {final_quality}/10，继续下一轮讨论优化"
-                    )
+                    logging.info(f"🔄 质量 {final_quality}/10，继续下一轮讨论优化")
 
-        # ✅ 最终综合
+        # 最终综合
         final_synthesis_start = time.time()
 
         logging.info(f"\n{'=' * 80}")
@@ -953,8 +1029,6 @@ class MultiAgentSwarm:
             force_non_stream=False
         )
 
-        # ✅ 记录最终综合耗时
-        final_synthesis_elapsed = time.time() - final_synthesis_start
         tracker.checkpoint("4️⃣ 最终综合")
 
         # 保存记忆
@@ -973,7 +1047,7 @@ class MultiAgentSwarm:
             )
             self._save_memory(memory_key, summary)
 
-            # 同时保存到向量数据库
+            # 向量记忆
             if self.vector_memory:
                 self.vector_memory.add(
                     summary,
@@ -989,7 +1063,6 @@ class MultiAgentSwarm:
         print(final_answer)
         print("=" * 100)
 
-        # ✅ 显示完整耗时统计
         print(tracker.summary())
         logging.info(tracker.summary())
 
