@@ -6,11 +6,12 @@ swarm:
   mode: "intelligent"
   num_agents: 4
   max_rounds: 12
-  reflection_planning: true        # 开启真正的 Plan-Act-Reflect 循环
+  reflection_planning: true
   enable_web_search: false
+  max_images: 2                    # 新增：最多支持2张图片
   memory_file: "memory.json"
   max_memory_items: 50
-  skills_dir: "skills"             # 已改为复数
+  skills_dir: "skills"
 
 agents:
   - name: Grok

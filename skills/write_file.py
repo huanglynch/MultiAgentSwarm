@@ -1,3 +1,5 @@
+import os
+
 def execute(path: str, content: str) -> str:
     try:
         os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
@@ -10,12 +12,15 @@ def execute(path: str, content: str) -> str:
 schema = {
     "type": "function",
     "function": {
-        "name": "read_file",
-        "description": "读取指定路径的本地文件内容",
+        "name": "write_file",
+        "description": "将内容写入指定路径的文件（自动创建目录）",
         "parameters": {
             "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"]
+            "properties": {
+                "path": {"type": "string", "description": "文件路径"},
+                "content": {"type": "string", "description": "要写入的内容"}
+            },
+            "required": ["path", "content"]
         }
     }
 }

@@ -6,6 +6,8 @@ import importlib.util
 import requests
 import random
 import time
+import threading
+import base64
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Callable
@@ -16,19 +18,42 @@ import chromadb
 from chromadb.utils import embedding_functions
 from duckduckgo_search import DDGS
 
+# ====================== 工具缓存 + 自动清理 ======================
+tool_cache = {}
+cache_count = 0
+
+
+def clean_cache():
+    global cache_count
+    if cache_count > 50:
+        tool_cache.clear()
+        cache_count = 0
+        logging.info("自动清理工具缓存")
+
 
 # ====================== 工具函数 ======================
 def web_search(query: str, num_results: int = 5) -> str:
+    global cache_count
+    clean_cache()
+    if query in tool_cache:
+        return tool_cache[query]
     time.sleep(random.uniform(0.5, 2.0))
     try:
         with DDGS() as ddgs:
             results = [r for r in ddgs.text(query, max_results=num_results)]
-        return "\n".join([f"标题: {r['title']}\n摘要: {r['body']}\n链接: {r['href']}" for r in results])
+        result = "\n".join([f"标题: {r['title']}\n摘要: {r['body']}\n链接: {r['href']}" for r in results])
+        tool_cache[query] = result
+        cache_count += 1
+        return result
     except Exception as e:
         return f"搜索失败: {str(e)}"
 
 
 def browse_page(url: str) -> str:
+    global cache_count
+    clean_cache()
+    if url in tool_cache:
+        return tool_cache[url]
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=10)
@@ -38,19 +63,47 @@ def browse_page(url: str) -> str:
         text = soup.get_text()
         lines = (line.strip() for line in text.splitlines())
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        return "\n".join(chunk for chunk in chunks if chunk)
+        result = "\n".join(chunk for chunk in chunks if chunk)
+        tool_cache[url] = result
+        cache_count += 1
+        return result
     except Exception as e:
         return f"浏览失败: {str(e)}"
 
 
 def run_python(code: str) -> str:
+    def target():
+        try:
+            restricted_globals = {
+                "__builtins__": {
+                    "print": print,
+                    "range": range,
+                    "len": len,
+                    "str": str,
+                    "int": int,
+                    "float": float,
+                    "list": list,
+                    "dict": dict
+                }
+            }
+            local_vars = {}
+            exec(code, restricted_globals, local_vars)
+            return str(local_vars.get("result", "执行成功，无返回结果"))
+        except Exception as e:
+            return f"执行错误: {str(e)}"
+
+    result = [None]
+
+    def timeout_handler():
+        result[0] = "执行超时（10秒）"
+
+    timer = threading.Timer(10.0, timeout_handler)
+    timer.start()
     try:
-        restricted_globals = {"__builtins__": {"print": print, "range": range, "len": len, "str": str, "int": int}}
-        local_vars = {}
-        exec(code, restricted_globals, local_vars)
-        return str(local_vars.get("result", "执行成功，无返回结果"))
-    except Exception as e:
-        return f"执行错误: {str(e)}"
+        result[0] = target()
+    finally:
+        timer.cancel()
+    return result[0]
 
 
 # ====================== 向量记忆 ======================
@@ -142,16 +195,32 @@ class Agent:
             return {"role": "tool", "tool_call_id": tool_call.id, "name": func_name, "content": f"Tool error: {str(e)}"}
 
     def generate_response(self, history: List[Dict], round_num: int, system_extra: str = "",
-                          force_non_stream: bool = False) -> str:
+                          force_non_stream: bool = False, image_paths: List[str] = None) -> str:
         use_stream = self.stream and not force_non_stream and not self.tools
 
         system_prompt = f"{self.role}\n{self.shared_knowledge}\n{system_extra}\n你是多智能体协作团队的一员，请提供有价值、准确、有深度的贡献。"
         messages = [{"role": "system", "content": system_prompt}]
+
         for h in history:
             if h["speaker"] == "User":
                 messages.append({"role": "user", "content": h["content"]})
             else:
                 messages.append({"role": "user", "content": f"[{h['speaker']}] {h.get('content', '')}"})
+
+        # 真正图像输入支持（最多2张）
+        if image_paths and len(image_paths) <= 2:
+            image_content = [{"type": "text", "text": "请分析以下图片："}]
+            for path in image_paths:
+                try:
+                    with open(path, "rb") as image_file:
+                        base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+                    image_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                    })
+                except:
+                    image_content.append({"type": "text", "text": f"[无法读取图片] {path}"})
+            messages.append({"role": "user", "content": image_content})
 
         try:
             if use_stream:
@@ -201,7 +270,7 @@ class Agent:
             return err
 
 
-# ====================== 主类 v2.5.2 ======================
+# ====================== 主类 v2.9 ======================
 class MultiAgentSwarm:
     def __init__(self, config_path: str = "swarm_config.yaml"):
         if not os.path.exists(config_path):
@@ -219,9 +288,10 @@ class MultiAgentSwarm:
         self.max_rounds = swarm.get("max_rounds", 3 if swarm.get("mode", "fixed") == "fixed" else 10)
         self.reflection_planning = swarm.get("reflection_planning", True)
         self.enable_web_search = swarm.get("enable_web_search", False)
+        self.max_images = swarm.get("max_images", 2)
 
         self.log_file = swarm.get("log_file", "swarm.log")
-        self.skills_dir = swarm.get("skills_dir", "skills")  # ← 已改为 skills
+        self.skills_dir = swarm.get("skills_dir", "skills")
         self.memory_file = swarm.get("memory_file", "memory.json")
         self.max_memory_items = swarm.get("max_memory_items", 50)
 
@@ -230,8 +300,7 @@ class MultiAgentSwarm:
                             encoding="utf-8", force=True)
         logging.getLogger().addHandler(logging.StreamHandler())
 
-        logging.info(
-            f"=== MultiAgentSwarm v2.5.2 初始化完成 | Mode: {self.mode} | Reflection+Planning: {self.reflection_planning} ===")
+        logging.info(f"=== MultiAgentSwarm v2.9 初始化完成 | Mode: {self.mode} ===")
 
         self.tool_registry, self.shared_knowledge = load_skills(self.skills_dir)
 
@@ -284,8 +353,10 @@ class MultiAgentSwarm:
         with open(self.memory_file, "w", encoding="utf-8") as f:
             json.dump(self.memory, f, ensure_ascii=False, indent=2)
 
-    def solve(self, task: str, use_memory: bool = False, memory_key: str = "default") -> str:
-        logging.info(f"【新任务】{task} | 记忆模式: {use_memory} | key: {memory_key}")
+    def solve(self, task: str, use_memory: bool = False, memory_key: str = "default",
+              image_paths: List[str] = None) -> str:
+        logging.info(
+            f"【新任务】{task} | 记忆模式: {use_memory} | key: {memory_key} | 图片数量: {len(image_paths) if image_paths else 0}")
         history: List[Dict] = [{"speaker": "User", "content": task}]
 
         if use_memory and memory_key in self.memory:
@@ -301,26 +372,22 @@ class MultiAgentSwarm:
 
             logging.info(f"--- 第 {round_num} 轮并行讨论开始 ---")
             with ThreadPoolExecutor(max_workers=len(self.agents)) as executor:
-                future_to_agent = {executor.submit(agent.generate_response, history.copy(), round_num): agent for agent
-                                   in self.agents}
+                future_to_agent = {
+                    executor.submit(agent.generate_response, history.copy(), round_num, "", False, image_paths): agent
+                    for agent in self.agents
+                }
                 for future in as_completed(future_to_agent):
                     agent = future_to_agent[future]
                     contribution = future.result()
                     history.append({"speaker": agent.name, "content": contribution})
 
-            # ==================== 升级后的 Reflection + Planning 循环 ====================
             if self.mode == "intelligent" and self.reflection_planning:
                 logging.info(f"--- Leader Reflection + Planning 第 {round_num} 轮 ---")
-
-                # Plan
                 plan_prompt = "请先规划本轮重点调查/改进方向（JSON格式）。"
                 plan = self.leader.generate_response(history + [{"speaker": "System", "content": plan_prompt}],
                                                      round_num, force_non_stream=True)
 
-                # Act（已在上一步完成）
-
-                # Reflect + Decide
-                reflect_prompt = "请反思本轮结果，给出质量评估和最终决策（JSON: quality_score, decision: continue/stop, reason, suggestions）"
+                reflect_prompt = "请反思本轮结果，给出质量评分（1-10）和决策（JSON: quality_score, decision: continue/stop, reason, suggestions）"
                 leader_eval = self.leader.generate_response(
                     history + [{"speaker": "System", "content": reflect_prompt}], round_num, force_non_stream=True)
 
@@ -332,12 +399,11 @@ class MultiAgentSwarm:
                 except:
                     pass
 
-        # Leader 最终综合
         logging.info("--- Leader 最终综合 ---")
         history.append({"speaker": "System", "content": "请综合以上全部讨论，给出最准确、最完整、最高质量的最终答案。"})
-        final_answer = self.leader.generate_response(history, round_num + 1, force_non_stream=False)
+        final_answer = self.leader.generate_response(history, round_num + 1, force_non_stream=False,
+                                                     image_paths=image_paths)
 
-        # 保存记忆
         if use_memory:
             summary_prompt = "请用 500 字以内总结本次任务的核心结论、关键发现和可复用经验。"
             summary = self.leader.generate_response(history + [{"speaker": "System", "content": summary_prompt}],
