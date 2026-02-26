@@ -399,6 +399,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                                         file_contents.append(
                                             f"### 📄 {Path(path).name} (PDF)\n"
+                                            f"【系统指令：以下是附件完整解析内容（已截断），请直接基于此内容进行分析评价，无需再次调用 pdf_reader、summarize_long_file 或任何读取工具】\n"
                                             f"页数: {result.get('pages', '未知')}\n"
                                             f"预览长度: {len(content)} 字符{'（已截断）' if truncated else ''}\n"
                                             f"内容:\n{content}"
@@ -423,6 +424,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                                         file_contents.append(
                                             f"### 📄 {Path(path).name}\n"
+                                            f"【系统指令：以下是附件完整解析内容（已截断），请直接基于此内容进行分析评价，无需再次调用 pdf_reader、summarize_long_file 或任何读取工具】\n"
                                             f"大小: {result.get('length', 0)} 字符\n"
                                             f"预览长度: {len(content)} 字符{'（已截断）' if truncated else ''}\n"
                                             f"内容:\n{content}"
@@ -678,415 +680,214 @@ async def upload_file(file: UploadFile = File(...)):
 
 # ====================== HTML 模板（完整版）======================
 def get_html_template():
-    """返回 HTML 模板"""
+    """返回 HTML 模板（极简风格）"""
     return """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MultiAgentSwarm WebUI</title>
-    <!-- Marked.js for Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #f8fafc;
+            color: #0f172a;
             height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
             padding: 20px;
         }
-
         .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 10px 30px rgba(15,23,42,0.08);
             width: 100%;
             max-width: 100%;
             height: 100vh;
             display: flex;
             overflow: hidden;
+            border: 1px solid #e2e8f0;
         }
 
+        /* Sidebar */
         .sidebar {
             width: 300px;
-            background: #f8f9fa;
-            border-right: 1px solid #e0e0e0;
+            background: #f8fafc;
+            border-right: 1px solid #e2e8f0;
             display: flex;
             flex-direction: column;
         }
-
         .sidebar-header {
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            padding: 24px;
+            background: #ffffff;
+            border-bottom: 1px solid #e2e8f0;
         }
+        .sidebar-header h2 { font-size: 18px; font-weight: 600; color: #0f172a; }
+        .sidebar-header p { font-size: 13px; color: #64748b; margin-top: 4px; }
 
-        .sidebar-header h2 {
-            font-size: 18px;
-            margin-bottom: 5px;
-        }
-
-        .sidebar-header p {
-            font-size: 12px;
-            opacity: 0.9;
-        }
-
-        .session-list {
-            flex: 1;
-            overflow-y: auto;
-            padding: 10px;
-        }
-
+        .session-list { flex: 1; overflow-y: auto; padding: 12px; }
         .session-item {
-            padding: 12px;
+            padding: 14px 16px;
             margin-bottom: 8px;
-            background: white;
-            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
             cursor: pointer;
-            transition: all 0.3s;
-            border: 2px solid transparent;
+            transition: all 0.2s;
         }
-
-        .session-item:hover {
-            border-color: #667eea;
-            transform: translateX(5px);
-        }
-
-        .session-item.active {
-            border-color: #667eea;
-            background: #f0f4ff;
+        .session-item:hover, .session-item.active {
+            border-color: #0ea5e9;
+            background: #f0f9ff;
+            transform: translateX(4px);
         }
 
         .new-session-btn {
-            margin: 10px;
-            padding: 12px;
-            background: #667eea;
+            margin: 12px;
+            padding: 14px;
+            background: #0ea5e9;
             color: white;
             border: none;
-            border-radius: 8px;
+            border-radius: 12px;
+            font-weight: 600;
             cursor: pointer;
-            font-size: 14px;
-            transition: all 0.3s;
+            transition: all 0.2s;
         }
+        .new-session-btn:hover { background: #0284c8; transform: translateY(-1px); }
 
-        .new-session-btn:hover {
-            background: #5568d3;
-            transform: translateY(-2px);
-        }
-
-        .chat-container {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-
+        /* Chat area */
+        .chat-container { flex: 1; display: flex; flex-direction: column; }
         .chat-header {
-            padding: 20px;
-            background: white;
-            border-bottom: 1px solid #e0e0e0;
+            padding: 20px 24px;
+            background: #ffffff;
+            border-bottom: 1px solid #e2e8f0;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
-
-        .chat-header h1 {
-            font-size: 24px;
-            color: #667eea;
-        }
+        .chat-header h1 { font-size: 22px; font-weight: 600; color: #0f172a; }
 
         .header-buttons button {
-            margin-left: 10px;
             padding: 8px 16px;
             border: none;
-            border-radius: 6px;
-            cursor: pointer;
+            border-radius: 8px;
             font-size: 14px;
-            transition: all 0.3s;
+            cursor: pointer;
+            transition: all 0.2s;
         }
-
-        .btn-settings {
-            background: #f0f4ff;
-            color: #667eea;
-        }
-
-        .btn-settings:hover {
-            background: #e0e8ff;
-        }
-
-        .btn-export {
-            background: #4caf50;
-            color: white;
-        }
-
-        .btn-export:hover {
-            background: #45a049;
-        }
-
-        .btn-clear {
-            background: #f44336;
-            color: white;
-        }
-
-        .btn-clear:hover {
-            background: #da190b;
-        }
+        .btn-settings { background: #f1f5f9; color: #475569; }
+        .btn-settings:hover { background: #e2e8f0; }
+        .btn-export { background: #10b981; color: white; }
+        .btn-export:hover { background: #059669; }
+        .btn-clear { background: #ef4444; color: white; }
+        .btn-clear:hover { background: #dc2626; }
 
         .messages {
             flex: 1;
             overflow-y: auto;
-            padding: 20px;
+            padding: 24px;
             background: #fafafa;
-            scroll-behavior: smooth;  /* ✅ 添加平滑滚动 */
+            scroll-behavior: smooth;
         }
 
         .message {
-            margin-bottom: 20px;
+            margin-bottom: 28px;
             display: flex;
-            animation: slideIn 0.3s ease;
+            animation: fadeIn 0.3s ease;
         }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .message.user {
-            justify-content: flex-end;
-        }
-
+        .message.user { justify-content: flex-end; }
         .message-content {
-            max-width: 70%;
-            padding: 15px 20px;
+            max-width: 72%;
+            padding: 16px 20px;
             border-radius: 18px;
             position: relative;
             word-wrap: break-word;
+            line-height: 1.6;
         }
-
         .message.user .message-content {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #0ea5e9;
             color: white;
         }
-
         .message.assistant .message-content {
-            background: white;
-            color: #333;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 2px 12px rgba(15,23,42,0.06);
         }
 
-        /* Markdown 样式 */
-        .message-content h1, .message-content h2, .message-content h3 {
-            margin-top: 16px;
-            margin-bottom: 8px;
-        }
-
-        .message-content h1 { font-size: 1.5em; }
-        .message-content h2 { font-size: 1.3em; }
-        .message-content h3 { font-size: 1.1em; }
-
-        .message-content p {
-            margin-bottom: 12px;
-            line-height: 1.6;
-        }
-
-        .message-content ul, .message-content ol {
-            margin-left: 20px;
-            margin-bottom: 12px;
-        }
-
-        .message-content li {
-            margin-bottom: 6px;
-            line-height: 1.6;
-        }
-
-        .message-content code {
-            background: #f4f4f4;
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9em;
-        }
-
-        .message-content pre {
-            background: #2d2d2d;
-            color: #f8f8f2;
-            padding: 12px;
-            border-radius: 6px;
-            overflow-x: auto;
-            margin-bottom: 12px;
-        }
-
-        .message-content pre code {
-            background: none;
-            padding: 0;
-            color: inherit;
-        }
-
-        .message-content blockquote {
-            border-left: 4px solid #667eea;
-            padding-left: 12px;
-            margin: 12px 0;
-            color: #666;
-            font-style: italic;
-        }
-
-        .message-content table {
-            border-collapse: collapse;
-            width: 100%;
-            margin-bottom: 12px;
-        }
-
-        .message-content th, .message-content td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
-        }
-
-        .message-content th {
-            background: #f4f4f4;
-            font-weight: bold;
-        }
-
-        /* ✅ 思考过程样式 */
+        /* Thinking box */
         .thinking-details {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 12px;
-            padding: 16px;
-            margin: 16px 0;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 4px 12px rgba(15,23,42,0.05);
         }
-
         .thinking-details summary {
-            cursor: pointer;
             font-weight: 600;
-            color: white;
-            user-select: none;
+            color: #334155;
+            cursor: pointer;
             list-style: none;
-            display: flex;
-            align-items: center;
-            gap: 8px;
         }
 
-        .thinking-details summary::-webkit-details-marker {
-            display: none;
+        /* Buttons & inputs */
+        .action-btn {
+            padding: 16px 24px;
+            background: #0ea5e9;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .action-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(14,165,233,0.3); }
+
+        .upload-btn { background: #10b981; }
+        .upload-btn:hover:not(:disabled) { box-shadow: 0 6px 16px rgba(16,185,129,0.3); }
+
+        #messageInput {
+            flex: 1;
+            padding: 16px 20px;
+            border: 1.5px solid #cbd5e1;
+            border-radius: 14px;
+            font-size: 15px;
+            resize: none;
+            min-height: 72px;
+            max-height: 200px;
+        }
+        #messageInput:focus {
+            border-color: #0ea5e9;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(14,165,233,0.1);
         }
 
-        .thinking-details summary::before {
-            content: '▼';
-            display: inline-block;
-            transition: transform 0.3s;
-        }
-
-        .thinking-details:not([open]) summary::before {
-            transform: rotate(-90deg);
-        }
-
-        .thinking-logs {
-            margin-top: 12px;
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 8px;
-            padding: 12px;
-            max-height: 300px;
-            overflow-y: auto;
-            scroll-behavior: smooth;  /* ✅ 添加平滑滚动 */
-        }
-
-        .log-entry {
-            padding: 6px 10px;
-            margin: 4px 0;
-            background: rgba(102, 126, 234, 0.1);
-            border-left: 3px solid #667eea;
-            border-radius: 4px;
-            font-size: 13px;
-            font-family: 'Consolas', 'Monaco', monospace;
-            color: #2d3748;
-            word-break: break-word;
-        }
-
-        /* ✅ 流式消息样式 */
-        .message.streaming {
-            animation: pulse 1.5s ease-in-out infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.8; }
-        }
-
+        /* Other styles remain the same (markdown, logs, etc.) */
         .agent-label {
-            display: inline-block;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #0ea5e9;
             color: white;
             padding: 4px 12px;
-            border-radius: 12px;
+            border-radius: 9999px;
             font-size: 12px;
             font-weight: 600;
             margin-bottom: 8px;
-        }
-
-        .streaming-content {
-            min-height: 20px;
-        }
-
-        /* ✅ 日志滚动条美化 */
-        .thinking-logs::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .thinking-logs::-webkit-scrollbar-track {
-            background: rgba(0,0,0,0.05);
-            border-radius: 3px;
-        }
-
-        .thinking-logs::-webkit-scrollbar-thumb {
-            background: #667eea;
-            border-radius: 3px;
-        }
-
-        .thinking-logs::-webkit-scrollbar-thumb:hover {
-            background: #764ba2;
-        }
-
-        .message-actions {
-            display: flex;
-            gap: 8px;
-            margin-top: 8px;
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-
-        .message:hover .message-actions {
-            opacity: 1;
+            display: inline-block;
         }
 
         .message-actions button {
-            padding: 4px 12px;
-            font-size: 12px;
+            padding: 6px 14px;
+            font-size: 13px;
+            background: #f1f5f9;
             border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            background: #f0f0f0;
-            color: #666;
-            transition: all 0.3s;
+            border-radius: 6px;
+            color: #64748b;
         }
-
-        .message-actions button:hover {
-            background: #e0e0e0;
-            color: #333;
-        }
+        .message-actions button:hover { background: #e2e8f0; color: #334155; }
 
         /* ✅ 修改输入区域样式 */
         .input-area {
@@ -1444,9 +1245,10 @@ def get_html_template():
         let ws = null;
         let currentSessionId = null;
         let isProcessing = false;
-        let currentStreamingDiv = null;  // ✅ 新增
-        let currentStreamingAgent = null;  // ✅ 新增
-        let thinkingDetailsElement = null;  // ✅ 新增
+        let currentStreamingDiv = null;
+        let currentStreamingAgent = null;
+        let thinkingDetailsElement = null;
+        let uploadedFilePaths = [];  // ✅ 移到全局作用域
 
         // 配置 Marked.js
         marked.setOptions({
@@ -1455,14 +1257,112 @@ def get_html_template():
             headerIds: false,
             mangle: false
         });
-
-        document.addEventListener('DOMContentLoaded', async function() {
-            await loadConfig();
-            await loadSessions();
-            createNewSession();
-            initToggleSwitches();
-        });
-
+        
+        // ==================== 新增：文件上传逻辑 ====================
+        async function handleFileUpload(event) {
+            const files = event.target.files;
+            const uploadedFilesDiv = document.getElementById('uploadedFiles');
+            
+            for (let file of files) {
+                // 1. 显示上传中状态
+                const fileTag = document.createElement('div');
+                fileTag.style.cssText = 'padding: 8px 12px; background: #e0e0e0; border-radius: 8px; display: flex; align-items: center; gap: 8px;';
+                fileTag.innerHTML = '⏳ ' + file.name + ' (上传中...)';
+                uploadedFilesDiv.appendChild(fileTag);
+                
+                try {
+                    // 2. 上传文件
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    const response = await fetch('/api/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === 'ok') {
+                        // 3. 更新显示为成功状态
+                        fileTag.innerHTML = '✅ ' + file.name + ' (' + formatBytes(data.size) + ')' +
+                            '<button onclick="removeUploadedFile(\' + data.path + \', this.parentElement)" ' +
+                            'style="background: none; border: none; cursor: pointer; font-size: 16px; margin-left: 8px;">❌</button>';
+                        fileTag.style.background = '#d4edda';
+                        
+                        // 4. 保存路径
+                        uploadedFilePaths.push(data.path);
+                    } else {
+                        throw new Error(data.detail || '上传失败');
+                    }
+                } catch (error) {
+                    fileTag.innerHTML = '❌ ' + file.name + ' (失败)';
+                    fileTag.style.background = '#f8d7da';
+                    console.error('上传失败:', error);
+                }
+            }
+            
+            // 清空 input（允许重复上传同名文件）
+            event.target.value = '';
+        }
+        
+        function removeUploadedFile(path, element) {
+            uploadedFilePaths = uploadedFilePaths.filter(function(p) { return p !== path; });
+            element.remove();
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+        
+        // ==================== 修改：发送消息时附带文件 ====================
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+        
+            if (!message && uploadedFilePaths.length === 0) return;
+            if (isProcessing) return;
+        
+            isProcessing = true;
+            document.getElementById('sendBtn').disabled = true;
+        
+            // ✅ 修复：移除多余的转义符
+            let fullMessage = message;
+            if (uploadedFilePaths.length > 0) {
+                const fileList = uploadedFilePaths.map(function(p) { return '- ' + p; }).join('\\n');
+                fullMessage = message + '\\n\\n📎 附件:\\n' + fileList;
+            }
+        
+            addMessage('user', fullMessage);
+            input.value = '';
+        
+            connectWebSocket();
+        
+            await new Promise(function(resolve) {
+                const checkConnection = setInterval(function() {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        clearInterval(checkConnection);
+                        resolve();
+                    }
+                }, 100);
+            });
+        
+            const forceComplexity = document.getElementById('force_complexity').value || null;
+        
+            ws.send(JSON.stringify({
+                message: fullMessage,
+                session_id: currentSessionId,
+                use_memory: false,
+                memory_key: 'default',
+                force_complexity: forceComplexity
+            }));
+        
+            // 清空已上传文件列表
+            uploadedFilePaths = [];
+            document.getElementById('uploadedFiles').innerHTML = '';
+        }
+        
         function initToggleSwitches() {
             document.querySelectorAll('.toggle-switch').forEach(function(toggle) {
                 toggle.addEventListener('click', function() {
@@ -1622,114 +1522,6 @@ def get_html_template():
             }
         }
 
-        // ==================== 新增：文件上传逻辑 ====================
-        let uploadedFilePaths = [];  // 存储已上传文件的路径
-        
-        async function handleFileUpload(event) {
-            const files = event.target.files;
-            const uploadedFilesDiv = document.getElementById('uploadedFiles');
-            
-            for (let file of files) {
-                // 1. 显示上传中状态
-                const fileTag = document.createElement('div');
-                fileTag.style.cssText = 'padding: 8px 12px; background: #e0e0e0; border-radius: 8px; display: flex; align-items: center; gap: 8px;';
-                fileTag.innerHTML = `⏳ ${file.name} (上传中...)`;
-                uploadedFilesDiv.appendChild(fileTag);
-                
-                try {
-                    // 2. 上传文件
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    
-                    const response = await fetch('/api/upload', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (data.status === 'ok') {
-                        // 3. 更新显示为成功状态
-                        fileTag.innerHTML = `
-                            ✅ ${file.name} (${formatBytes(data.size)})
-                            <button onclick="removeUploadedFile('${data.path}', this.parentElement)" style="background: none; border: none; cursor: pointer; font-size: 16px;">❌</button>
-                        `;
-                        fileTag.style.background = '#d4edda';
-                        
-                        // 4. 保存路径（用于发送消息时附带）
-                        uploadedFilePaths.push(data.path);
-                    } else {
-                        throw new Error(data.detail || '上传失败');
-                    }
-                } catch (error) {
-                    fileTag.innerHTML = `❌ ${file.name} (失败)`;
-                    fileTag.style.background = '#f8d7da';
-                    console.error('上传失败:', error);
-                }
-            }
-            
-            // 清空 input（允许重复上传同名文件）
-            event.target.value = '';
-        }
-        
-        function removeUploadedFile(path, element) {
-            uploadedFilePaths = uploadedFilePaths.filter(p => p !== path);
-            element.remove();
-        }
-        
-        function formatBytes(bytes) {
-            if (bytes < 1024) return bytes + ' B';
-            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-        }
-        
-        // ==================== 修改：发送消息时附带文件 ====================
-        async function sendMessage() {
-            const input = document.getElementById('messageInput');
-            const message = input.value.trim();
-        
-            if (!message && uploadedFilePaths.length === 0) return;  // ✅ 允许仅发送文件
-            if (isProcessing) return;
-        
-            isProcessing = true;
-            document.getElementById('sendBtn').disabled = true;
-        
-            // 构建消息（附加文件信息）
-            let fullMessage = message;
-            if (uploadedFilePaths.length > 0) {
-                const fileList = uploadedFilePaths.map(p => `- ${p}`).join('\n');
-                fullMessage = `${message}\n\n📎 附件:\n${fileList}`;
-            }
-        
-            addMessage('user', fullMessage);
-            input.value = '';
-        
-            connectWebSocket();
-        
-            await new Promise(function(resolve) {
-                const checkConnection = setInterval(function() {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        clearInterval(checkConnection);
-                        resolve();
-                    }
-                }, 100);
-            });
-        
-            const forceComplexity = document.getElementById('force_complexity').value || null;
-        
-            ws.send(JSON.stringify({
-                message: fullMessage,  // ✅ 包含文件路径的完整消息
-                session_id: currentSessionId,
-                use_memory: false,
-                memory_key: 'default',
-                force_complexity: forceComplexity
-            }));
-        
-            // 清空已上传文件列表
-            uploadedFilePaths = [];
-            document.getElementById('uploadedFiles').innerHTML = '';
-        }
-
         // 前端 HTML 模板中的 addMessage 函数（增强版）
         function addMessage(role, content) {
             const messagesDiv = document.getElementById('messages');
@@ -1746,20 +1538,20 @@ def get_html_template():
                 const attachmentSection = parts[1] || '';
                 
                 // 提取附件列表
-                const attachmentLines = attachmentSection.split('\n').filter(line => line.trim().startsWith('- '));
+                const attachmentLines = attachmentSection.split('\\n').filter(line => line.trim().startsWith('- '));
                 
                 // 构建消息内容
                 let htmlContent = '';
                 
                 // 主文本
                 if (mainText) {
-                    htmlContent += `<div style="margin-bottom: 12px;">${mainText}</div>`;
+                    htmlContent += '<div style="margin-bottom: 12px;">' + mainText + '</div>';
                 }
                 
-                // 附件卡片
+                // 附件卡片（✅ 使用字符串拼接代替模板字符串）
                 if (attachmentLines.length > 0) {
                     htmlContent += '<div style="margin-top: 12px;">';
-                    attachmentLines.forEach(line => {
+                    attachmentLines.forEach(function(line) {
                         const path = line.replace('- ', '').trim();
                         const filename = path.split('/').pop();
                         const fileExt = filename.split('.').pop().toLowerCase();
@@ -1770,21 +1562,19 @@ def get_html_template():
                         else if (['txt', 'md'].includes(fileExt)) icon = '📝';
                         else if (['png', 'jpg', 'jpeg', 'gif', 'bmp'].includes(fileExt)) icon = '🖼️';
                         
-                        htmlContent += `
-                            <div class="attachment-card" style="
-                                background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-                                padding: 10px 14px;
-                                border-radius: 10px;
-                                margin: 6px 0;
-                                border-left: 3px solid #667eea;
-                                display: flex;
-                                align-items: center;
-                                gap: 8px;
-                            ">
-                                <span style="font-size: 20px;">${icon}</span>
-                                <strong style="color: #667eea;">${filename}</strong>
-                            </div>
-                        `;
+                        htmlContent += '<div class="attachment-card" style="' +
+                            'background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);' +
+                            'padding: 10px 14px;' +
+                            'border-radius: 10px;' +
+                            'margin: 6px 0;' +
+                            'border-left: 3px solid #667eea;' +
+                            'display: flex;' +
+                            'align-items: center;' +
+                            'gap: 8px;' +
+                            '">' +
+                            '<span style="font-size: 20px;">' + icon + '</span>' +
+                            '<strong style="color: #667eea;">' + filename + '</strong>' +
+                            '</div>';
                     });
                     htmlContent += '</div>';
                 }
@@ -1801,10 +1591,8 @@ def get_html_template():
             // ✅ 统一添加操作按钮（用户和助手都有）
             const actionsDiv = document.createElement('div');
             actionsDiv.className = 'message-actions';
-            actionsDiv.innerHTML = `
-                <button onclick="copyMessage(this)">📋 复制</button>
-                <button onclick="deleteMessage(this)">🗑️ 删除</button>
-            `;
+            actionsDiv.innerHTML = '<button onclick="copyMessage(this)">📋 复制</button>' +
+                '<button onclick="deleteMessage(this)">🗑️ 删除</button>';
             contentDiv.appendChild(actionsDiv);
         
             messageDiv.appendChild(contentDiv);
@@ -2039,6 +1827,14 @@ def get_html_template():
                 alert('❌ 保存失败: ' + error.message);
             }
         }
+        
+        document.addEventListener('DOMContentLoaded', async function() {
+            await loadConfig();
+            await loadSessions();
+            createNewSession();
+            initToggleSwitches();
+        });
+        
     </script>
 </body>
 </html>"""

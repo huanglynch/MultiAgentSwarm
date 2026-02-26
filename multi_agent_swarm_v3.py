@@ -688,7 +688,8 @@ class Agent:
                     hasattr(response.choices[0].message, 'tool_calls') and
                     response.choices[0].message.tool_calls):
 
-                max_tool_iterations = 5
+                # max_tool_iterations = 5
+                max_tool_iterations = 10
                 iteration = 0
 
                 while (hasattr(response.choices[0].message, 'tool_calls') and
