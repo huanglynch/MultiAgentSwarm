@@ -230,20 +230,39 @@ async def export_session(session_id: str):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket 端点（支持真实流式输出）"""
+    """
+    WebSocket 端点（支持真实流式输出 + 多轮对话历史）
+    ✅ 优化点：
+    1. 智能历史管理（最近 10 轮 + Token 限制）
+    2. 历史压缩（每 5 轮自动总结）
+    3. 异常恢复机制
+    4. 性能监控
+    """
     await websocket.accept()
+
+    # 性能监控
+    import time
+    start_time = time.time()
 
     try:
         while True:
-            # 接收客户端消息
+            # ==================== 1. 接收并解析消息 ====================
             data = await websocket.receive_json()
-            message = data.get("message", "")
+            message = data.get("message", "").strip()
+
+            if not message:
+                await websocket.send_json({
+                    "type": "error",
+                    "content": "❌ 消息不能为空"
+                })
+                continue
+
             session_id = get_or_create_session(data.get("session_id"))
             use_memory = data.get("use_memory", False)
             memory_key = data.get("memory_key", "default")
             force_complexity = data.get("force_complexity")
 
-            # 保存用户消息
+            # ==================== 2. 保存用户消息 ====================
             user_msg = {
                 "role": "user",
                 "content": message,
@@ -257,7 +276,91 @@ async def websocket_endpoint(websocket: WebSocket):
                 "session_id": session_id
             })
 
-            # ✅ 创建流式和日志队列
+            # ==================== 3. 构建智能对话历史 ====================
+            # ==================== 3. 构建智能对话历史 ====================
+            history_context = ""
+            history_lines = []  # ✅ 提前初始化
+
+            if len(conversations[session_id]) > 1:
+                recent_messages = conversations[session_id][:-1]
+
+                if len(recent_messages) > 10:
+                    recent_messages = recent_messages[-10:]
+
+                MAX_HISTORY_TOKENS = 2000
+                accumulated_text = ""
+                selected_messages = []
+
+                for msg in reversed(recent_messages):
+                    candidate = f"{msg['content']}\n\n{accumulated_text}"
+                    estimated_tokens = len(candidate) * 0.75
+
+                    if estimated_tokens > MAX_HISTORY_TOKENS:
+                        break
+
+                    accumulated_text = candidate
+                    selected_messages.insert(0, msg)
+
+                # 自动总结逻辑（保持不变）
+                total_messages = len(conversations[session_id])
+                if total_messages > 5 and total_messages % 5 == 0:
+                    last_msg = conversations[session_id][-2]
+                    if last_msg.get("role") != "system":
+                        try:
+                            summary_prompt = "请用 100 字以内总结前 5 轮对话的关键信息和上下文。"
+                            summary_history = [
+                                {"speaker": "User" if m["role"] == "user" else "Assistant",
+                                 "content": m["content"]}
+                                for m in selected_messages[-5:]
+                            ]
+                            summary_history.append({"speaker": "System", "content": summary_prompt})
+
+                            summary = swarm.leader.generate_response(
+                                summary_history,
+                                round_num=0,
+                                force_non_stream=True
+                            )
+
+                            summary_msg = {
+                                "role": "system",
+                                "content": f"📝 [历史总结] {summary}",
+                                "timestamp": datetime.now().isoformat()
+                            }
+                            conversations[session_id].insert(-1, summary_msg)
+                            selected_messages.append(summary_msg)
+
+                            await websocket.send_json({
+                                "type": "log",
+                                "content": "📝 已生成历史总结"
+                            })
+                        except Exception as e:
+                            print(f"⚠️ 生成历史总结失败: {e}")
+
+                # 构建历史文本
+                if selected_messages:
+                    for msg in selected_messages:
+                        if msg["role"] == "system":
+                            history_lines.append(msg["content"])
+                        else:
+                            role_name = "User" if msg["role"] == "user" else "Assistant"
+                            content = msg["content"][:500]
+                            if len(msg["content"]) > 500:
+                                content += "..."
+                            history_lines.append(f"{role_name}: {content}")
+
+                    history_context = "\n\n".join(history_lines)
+
+            # ✅ 现在 history_lines 一定有定义
+            if history_context:
+                full_message = f"""=== 📚 对话历史（最近 {len(history_lines)} 轮）===
+            {history_context}
+
+            === 💬 当前问题 ===
+            User: {message}"""
+            else:
+                full_message = message
+
+            # ==================== 4. 创建异步队列 ====================
             stream_queue = asyncio.Queue()
             log_queue = asyncio.Queue()
 
@@ -272,6 +375,9 @@ async def websocket_endpoint(websocket: WebSocket):
                         await websocket.send_json(data)
                     except asyncio.TimeoutError:
                         continue
+                    except Exception as e:
+                        print(f"⚠️ 流式发送失败: {e}")
+                        break
 
             # ✅ 后台任务：持续发送日志
             async def log_sender():
@@ -289,6 +395,9 @@ async def websocket_endpoint(websocket: WebSocket):
                         })
                     except asyncio.TimeoutError:
                         continue
+                    except Exception as e:
+                        print(f"⚠️ 日志发送失败: {e}")
+                        break
 
             # 启动后台任务
             sender_task = asyncio.create_task(stream_sender())
@@ -317,11 +426,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         loop
                     )
 
-                # ✅ 执行 Swarm（带回调）
+                # ==================== 5. 执行 Swarm（带回调）====================
                 answer = await loop.run_in_executor(
                     None,
                     lambda: swarm.solve(
-                        message,
+                        full_message,  # ✅ 包含历史的完整消息
                         use_memory,
                         memory_key,
                         None,  # image_paths
@@ -331,7 +440,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
                 )
 
-                # 保存 AI 回复
+                # ==================== 6. 保存 AI 回复 ====================
                 ai_msg = {
                     "role": "assistant",
                     "content": answer,
@@ -345,18 +454,37 @@ async def websocket_endpoint(websocket: WebSocket):
                 await sender_task
                 await log_task
 
+                # ==================== 7. 性能监控 ====================
+                elapsed = time.time() - start_time
+                await websocket.send_json({
+                    "type": "log",
+                    "content": f"⏱️ 总耗时: {elapsed:.2f}秒"
+                })
+
                 await websocket.send_json({
                     "type": "end"
                 })
 
+                # 重置计时器
+                start_time = time.time()
+
             except Exception as e:
-                # 异常处理
+                # ==================== 8. 异常处理 ====================
+                print(f"❌ Swarm 执行失败: {e}")
+                import traceback
+                traceback.print_exc()
+
+                # 停止后台任务
                 await stream_queue.put(None)
                 await log_queue.put(None)
-                await sender_task
-                await log_task
 
-                error_msg = f"❌ 执行失败: {str(e)}"
+                try:
+                    await sender_task
+                    await log_task
+                except:
+                    pass
+
+                error_msg = f"❌ 执行失败: {str(e)[:200]}"
 
                 # ✅ 检查连接状态再发送
                 try:
@@ -364,8 +492,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "error",
                         "content": error_msg
                     })
-                except:
-                    print(f"⚠️ WebSocket 已关闭，无法发送错误消息")
+                    await websocket.send_json({
+                        "type": "end"
+                    })
+                except Exception as send_error:
+                    print(f"⚠️ WebSocket 已关闭，无法发送错误消息: {send_error}")
                     break
 
                 # 保存错误消息
@@ -376,9 +507,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
 
     except WebSocketDisconnect:
-        print("WebSocket 断开连接")
+        print(f"🔌 WebSocket 断开连接 (session: {session_id if 'session_id' in locals() else 'unknown'})")
     except Exception as e:
-        print(f"WebSocket 错误: {e}")
+        print(f"💥 WebSocket 致命错误: {e}")
+        import traceback
+        traceback.print_exc()
+
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "content": f"❌ 连接错误: {str(e)[:100]}"
+            })
+        except:
+            pass
 
 
 # ====================== HTML 模板（完整版）======================
@@ -549,6 +690,7 @@ def get_html_template():
             overflow-y: auto;
             padding: 20px;
             background: #fafafa;
+            scroll-behavior: smooth;  /* ✅ 添加平滑滚动 */
         }
 
         .message {
@@ -705,6 +847,7 @@ def get_html_template():
             padding: 12px;
             max-height: 300px;
             overflow-y: auto;
+            scroll-behavior: smooth;  /* ✅ 添加平滑滚动 */
         }
 
         .log-entry {
@@ -1181,25 +1324,31 @@ def get_html_template():
                 thinkingDetailsElement = document.createElement('details');
                 thinkingDetailsElement.className = 'thinking-details';
                 thinkingDetailsElement.open = true;
-
+        
                 thinkingDetailsElement.innerHTML = `
                     <summary>🤔 思考过程</summary>
                     <div class="thinking-logs"></div>
                 `;
-
+        
                 messagesDiv.appendChild(thinkingDetailsElement);
             }
-
+        
             // 添加日志条目
             const logsDiv = thinkingDetailsElement.querySelector('.thinking-logs');
             const logEntry = document.createElement('div');
             logEntry.className = 'log-entry';
             logEntry.textContent = logContent;
             logsDiv.appendChild(logEntry);
-
-            // 自动滚动
-            const messagesDiv = document.getElementById('messages');
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        
+            // ✅ 双重滚动：先滚动思考日志容器，再滚动外部消息容器
+            // 1. 滚动思考日志容器到底部
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+            
+            // 2. 滚动外部消息容器到底部（使用 setTimeout 确保 DOM 更新完成）
+            setTimeout(function() {
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }, 0);
         }
 
         // ✅ 新增：更新流式消息
@@ -1298,26 +1447,30 @@ def get_html_template():
             }));
         }
 
+        // 前端 HTML 模板中的 addMessage 函数
         function addMessage(role, content) {
             const messagesDiv = document.getElementById('messages');
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message ' + role;
-
+        
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
-
+        
             if (role === 'assistant') {
-                // 使用 Marked.js 渲染 Markdown
                 contentDiv.innerHTML = marked.parse(content);
-
-                const actionsDiv = document.createElement('div');
-                actionsDiv.className = 'message-actions';
-                actionsDiv.innerHTML = '<button onclick="copyMessage(this)">📋 复制</button><button onclick="deleteMessage(this)">🗑️ 删除</button>';
-                contentDiv.appendChild(actionsDiv);
             } else {
                 contentDiv.textContent = content;
             }
-
+        
+            // ✅ 统一添加操作按钮（用户和助手都有）
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'message-actions';
+            actionsDiv.innerHTML = `
+                <button onclick="copyMessage(this)">📋 复制</button>
+                <button onclick="deleteMessage(this)">🗑️ 删除</button>
+            `;
+            contentDiv.appendChild(actionsDiv);
+        
             messageDiv.appendChild(contentDiv);
             messagesDiv.appendChild(messageDiv);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
