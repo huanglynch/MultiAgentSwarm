@@ -5,15 +5,10 @@ openai:
 swarm:
   mode: "intelligent"                    # 运行模式: "fixed" 或 "intelligent"
   num_agents: 4                          # 使用的 Agent 数量
-  max_concurrent_agents: 2               # ✅ 新增：最大并发执行的 Agent 数量（默认 2）
+  max_concurrent_agents: 2               # 最大并发执行的 Agent 数量
   max_rounds: 12                         # 最大讨论轮次
 
-  # 反思与规划配置
-  reflection_planning: true              # 是否启用 Reflection + Planning
-  max_reflection_rounds: 3               # 每轮最多反思次数
-  reflection_quality_threshold: 9        # 立即停止反思的质量线
-  stop_quality_threshold: 8              # 停止整体讨论的质量线
-  quality_convergence_delta: 0.5         # 收敛判定阈值
+  reflection_planning: true              # 是否启用反思机制
 
   # 功能开关
   enable_web_search: false               # 是否启用网络搜索
@@ -25,14 +20,64 @@ swarm:
   skills_dir: "skills"                   # Skills 目录
   log_file: "swarm.log"                  # 日志文件
 
-  # ✅ 新增：向量记忆配置
+  # 向量记忆配置
   vector_memory:
     enabled: true                        # 是否启用向量记忆
     persist_directory: "./memory_db"     # ChromaDB 数据库路径
-    model_cache_dir: "./cached_model/"   # ✅ 向量模型缓存目录
-    # embedding_model: "sentence-transformers/all-MiniLM-L6-v2"  # 嵌入模型
-    # embedding_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    embedding_model: "sentence-transformers/distiluse-base-multilingual-cased-v2" # 平衡
+    model_cache_dir: "./cached_model/"   # 向量模型缓存目录
+    embedding_model: "sentence-transformers/distiluse-base-multilingual-cased-v2"
+
+# ============================================================
+# ✨ 高级增强功能配置
+# ============================================================
+advanced_features:
+  # 对抗式辩论（Pro vs Con vs Judge）
+  adversarial_debate:
+    enabled: true                        # ✅ 默认启用
+    description: "多角色对抗式辩论机制"
+
+  # Meta-Critic（元批评者）
+  meta_critic:
+    enabled: true                        # ✅ 默认启用
+    description: "综合评估与元反思"
+
+  # 任务分解与动态 Agent 工厂
+  task_decomposition:
+    enabled: true                        # ✅ 默认启用
+    description: "自动将任务分解为子任务并分配"
+
+  # 主动知识图谱 + 蒸馏
+  knowledge_graph:
+    enabled: true                        # ✅ 默认启用
+    description: "提取关键概念并构建知识网络"
+
+  # 自适应反思深度
+  adaptive_reflection:
+    enabled: true                        # ✅ 默认启用
+    max_rounds: 3                        # 最多反思轮次
+    quality_threshold: 85                # 立即停止阈值（0-100）
+    stop_threshold: 80                   # 可接受停止阈值
+    convergence_delta: 3                 # 质量收敛判定阈值（小于此值视为停滞）
+    description: "根据质量动态调整反思深度"
+
+# ✨ 智能路由配置
+intelligent_routing:
+  enabled: true                        # ✅ 默认启用智能路由
+  force_complexity: null               # 可选: "simple"/"medium"/"complex" (调试用)
+
+# ==================== 全局共享知识（所有 Agent 都会看到） ====================
+shared_knowledge: |
+  【文件探索铁律 - 必须严格遵守】
+  1. 任何时候想查看项目结构、文件、报告，必须**第一步先调用 get_project_structure()**。
+  2. 绝不要盲目猜测目录（如 data/、outputs/、reports/、skills/）。
+  3. 得到结构后再决定使用 read_file / list_dir / write_file。
+  
+  【输出规范】
+  - 所有最终答案必须使用清晰的 Markdown 结构。
+  - 发现不确定信息时，必须主动声明「基于现有信息」。
+
+  【反思机制】
+  - 每次贡献前，先用 [CRITIQUE] 标记指出上一轮的 1 个漏洞或可改进点。
 
 # ============================================================
 # Agent 配置
