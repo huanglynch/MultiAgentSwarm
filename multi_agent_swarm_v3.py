@@ -575,12 +575,33 @@ class Agent:
             round_num: int,
             system_extra: str = "",
             force_non_stream: bool = False,
-            critique_previous: bool = False  # ✨ 新增：是否先批判上一轮
+            critique_previous: bool = False,
+            stream_callback=None,
+            log_callback=None
     ) -> str:
-        """生成响应"""
+        """
+        生成 Agent 响应
+
+        Args:
+            history: 对话历史
+            round_num: 当前轮次
+            system_extra: 额外系统提示词
+            force_non_stream: 强制关闭流式输出
+            critique_previous: 是否启用批判模式
+            stream_callback: 流式回调函数 callback(agent_name, chunk)
+            log_callback: 日志回调函数 callback(message)
+
+        Returns:
+            str: Agent 的完整响应
+        """
         start_time = time.time()
 
-        use_stream = self.stream and not force_non_stream and not self.tools
+        # ✅ 判断是否使用流式输出（如果有 stream_callback，强制启用）
+        use_stream = (
+                (self.stream or stream_callback is not None) and
+                not force_non_stream and
+                not self.tools  # 有工具时暂时不用流式
+        )
 
         # ✨ 批判模式增强
         if critique_previous and len(history) > 3:
@@ -615,9 +636,16 @@ class Agent:
                 })
 
         try:
+            # ✅ 添加开始日志
+            if log_callback:
+                log_callback(f"[{self.name}] 开始生成响应 (轮次 {round_num})")
+
             if use_stream:
                 print(f"\n💬 【{self.name}】正在思考... ", end="", flush=True)
+                if log_callback:
+                    log_callback(f"[{self.name}] 正在思考...")
 
+            # 调用 API
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -630,23 +658,37 @@ class Agent:
 
             full_response = ""
 
-            # 流式输出
+            # ===== 流式输出 =====
             if use_stream:
                 for chunk in response:
                     if chunk.choices[0].delta.content:
                         delta = chunk.choices[0].delta.content
                         print(delta, end="", flush=True)
                         full_response += delta
+
+                        # ✅ 流式回调
+                        if stream_callback:
+                            stream_callback(self.name, delta)
                 print()
+
+            # ===== 非流式输出 =====
             else:
                 full_response = response.choices[0].message.content or ""
+
+                # ✅ 即使非流式，也调用回调（模拟流式效果）
+                if stream_callback and full_response:
+                    chunk_size = 20
+                    for i in range(0, len(full_response), chunk_size):
+                        chunk = full_response[i:i + chunk_size]
+                        stream_callback(self.name, chunk)
+                        time.sleep(0.02)  # 可选：模拟打字延迟
 
             # ===== 🔧 工具调用处理（支持多轮循环）=====
             if (not use_stream and
                     hasattr(response.choices[0].message, 'tool_calls') and
                     response.choices[0].message.tool_calls):
 
-                max_tool_iterations = 5  # 防止无限循环
+                max_tool_iterations = 5
                 iteration = 0
 
                 while (hasattr(response.choices[0].message, 'tool_calls') and
@@ -656,7 +698,10 @@ class Agent:
                     iteration += 1
                     print(f"\n🔧 [{self.name}] 工具调用 (第 {iteration} 轮)")
 
-                    # 添加 Assistant 的消息（包含工具调用请求）
+                    if log_callback:
+                        log_callback(f"[{self.name}] 工具调用 (第 {iteration} 轮)")
+
+                    # 添加 assistant 消息（包含 tool_calls）
                     messages.append(response.choices[0].message.model_dump())
 
                     # 执行所有工具调用
@@ -664,13 +709,16 @@ class Agent:
                         tool_result = self._execute_tool(tool_call)
                         messages.append(tool_result)
 
-                        # 显示工具执行结果（截断显示）
+                        # 显示工具调用结果（截断预览）
                         result_preview = tool_result.get("content", "")[:150]
                         if len(tool_result.get("content", "")) > 150:
                             result_preview += "..."
                         print(f"   ✅ {tool_result['name']}: {result_preview}")
 
-                    # 继续调用 LLM（可能再次触发工具或返回最终答案）
+                        if log_callback:
+                            log_callback(f"[{self.name}] 工具: {tool_result['name']}")
+
+                    # 重新调用 API（带工具结果）
                     response = self.client.chat.completions.create(
                         model=self.model,
                         messages=messages,
@@ -678,29 +726,52 @@ class Agent:
                         max_tokens=self.max_tokens,
                         tools=self.tools if self.tools else None,
                         tool_choice="auto" if self.tools else None,
-                        stream=False
+                        stream=False  # 工具调用后暂时用非流式
                     )
 
-                    # 检查是否还有工具调用
+                    # ✅ 关键修复：如果不再调用工具，提取最终答案并发送给前端
                     if not (hasattr(response.choices[0].message, 'tool_calls') and
                             response.choices[0].message.tool_calls):
-                        # 没有工具调用了，获取最终答案
                         full_response = response.choices[0].message.content or ""
+
+                        # ✅ 模拟流式发送（分块发送给前端）
+                        if stream_callback and full_response:
+                            chunk_size = 20  # 每块 20 个字符（可调整）
+                            for i in range(0, len(full_response), chunk_size):
+                                chunk = full_response[i:i + chunk_size]
+                                stream_callback(self.name, chunk)
+                                time.sleep(0.02)  # 模拟打字效果
+
                         print(f"   💬 [{self.name}] 工具调用完成，生成最终答案")
+                        if log_callback:
+                            log_callback(f"[{self.name}] 工具调用完成")
                         break
 
-                # 超过最大迭代次数的处理
+                # ✅ 工具调用超限处理
                 if iteration >= max_tool_iterations:
                     print(f"   ⚠️ [{self.name}] 工具调用达到上限 ({max_tool_iterations} 轮)")
                     full_response = response.choices[0].message.content or "[工具调用超限，请简化任务]"
-            # ===== 工具调用处理结束 =====
 
-            # 计算并显示耗时
+                    # ✅ 超限时也发送给前端
+                    if stream_callback and full_response:
+                        chunk_size = 20
+                        for i in range(0, len(full_response), chunk_size):
+                            chunk = full_response[i:i + chunk_size]
+                            stream_callback(self.name, chunk)
+                            time.sleep(0.02)
+
+                    if log_callback:
+                        log_callback(f"[{self.name}] 工具调用超限")
+
+            # ===== 计算并显示耗时 =====
             elapsed = time.time() - start_time
             elapsed_str = f"{elapsed:.2f}秒" if elapsed < 60 else f"{int(elapsed // 60)}分{elapsed % 60:.1f}秒"
 
             if not use_stream:
                 print(f"⏱️  【{self.name}】响应完成 | 耗时: {elapsed_str}")
+
+            if log_callback:
+                log_callback(f"[{self.name}] 响应完成 (耗时 {elapsed_str})")
 
             logging.info(f"⏱️  {self.name} 响应耗时: {elapsed_str}")
 
@@ -711,6 +782,10 @@ class Agent:
             err = f"[Error in {self.name}]: {str(e)}"
             logging.error(f"{err} | 耗时: {elapsed:.2f}秒")
             print(f"❌ 【{self.name}】执行失败 | 耗时: {elapsed:.2f}秒")
+
+            if log_callback:
+                log_callback(f"[{self.name}] ❌ 执行失败: {str(e)[:50]}")
+
             return err
 
 
@@ -1066,7 +1141,9 @@ class MultiAgentSwarm:
             use_memory: bool = False,
             memory_key: str = "default",
             image_paths: Optional[List[str]] = None,
-            force_complexity: Optional[str] = None  # ✨ 新增：手动指定复杂度
+            force_complexity: Optional[str] = None,
+            stream_callback=None,  # ✅ 新增：流式输出回调
+            log_callback=None  # ✅ 新增：日志回调
     ) -> str:
         """
         解决任务的主入口（智能路由版 v3.1.0）
@@ -1077,6 +1154,8 @@ class MultiAgentSwarm:
             memory_key: 记忆键名
             image_paths: 图片路径列表（最多 max_images 张）
             force_complexity: 强制指定复杂度 "simple"/"medium"/"complex"（优先级最高，用于调试）
+            stream_callback: 流式输出回调 func(agent_name, content)
+            log_callback: 日志回调 func(message)
 
         Returns:
             最终答案字符串
@@ -1092,6 +1171,10 @@ class MultiAgentSwarm:
         print(f"🚀 任务开始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'=' * 80}\n")
 
+        # ✅ 发送开始日志
+        if log_callback:
+            log_callback("🚀 任务开始")
+
         # ✨✨✨ 核心：智能任务分类（带降级保护）✨✨✨
         try:
             if self.intelligent_routing_enabled:
@@ -1104,18 +1187,28 @@ class MultiAgentSwarm:
                     complexity = self._classify_task_complexity(task)
             else:
                 logging.info("🔴 智能路由已禁用，使用完整模式")
+                if log_callback:
+                    log_callback("🔴 智能路由已禁用，使用完整模式")
                 complexity = "complex"
 
             tracker.checkpoint("1️⃣ 任务分类")
 
+            # ✅ 发送分类结果
+            if log_callback:
+                log_callback(f"📊 任务复杂度: {complexity.upper()}")
+
         except Exception as e:
             logging.error(f"❌ 任务分类失败: {e}，回退到完整模式")
+            if log_callback:
+                log_callback(f"⚠️ 任务分类失败，使用完整模式")
             complexity = "complex"
 
         # 处理图像
         if image_paths:
             image_paths = image_paths[:self.max_images]
             logging.info(f"📷 处理 {len(image_paths)} 张图片")
+            if log_callback:
+                log_callback(f"📷 处理 {len(image_paths)} 张图片")
 
         history: List[Dict] = []
 
@@ -1148,13 +1241,22 @@ class MultiAgentSwarm:
 
         try:
             if complexity == "simple":
-                final_answer = self._solve_simple(task, history)
+                final_answer = self._solve_simple(
+                    task, history,
+                    stream_callback, log_callback  # ✅ 传递
+                )
 
             elif complexity == "medium":
-                final_answer = self._solve_medium(task, history, tracker)
+                final_answer = self._solve_medium(
+                    task, history, tracker,
+                    stream_callback, log_callback  # ✅ 传递
+                )
 
             else:  # complex
-                final_answer = self._solve_complex(task, history, tracker, use_memory, memory_key)
+                final_answer = self._solve_complex(
+                    task, history, tracker, use_memory, memory_key,
+                    stream_callback, log_callback  # ✅ 传递
+                )
 
         except Exception as e:
             logging.error(f"❌ {complexity.upper()} 模式执行失败: {e}")
@@ -1163,13 +1265,22 @@ class MultiAgentSwarm:
             print(f"🔄 自动降级到 COMPLEX 完整模式...")
             print(f"{'!' * 80}\n")
 
+            # ✅ 发送降级日志
+            if log_callback:
+                log_callback(f"⚠️ {complexity.upper()} 模式失败，降级到 COMPLEX")
+
             # 降级到完整模式
             execution_mode = "complex (降级)"
             try:
-                final_answer = self._solve_complex(task, history, tracker, use_memory, memory_key)
+                final_answer = self._solve_complex(
+                    task, history, tracker, use_memory, memory_key,
+                    stream_callback, log_callback  # ✅ 传递
+                )
             except Exception as fallback_error:
                 logging.error(f"❌ 降级执行也失败: {fallback_error}")
                 final_answer = f"[系统错误] 任务执行失败:\n原始错误: {str(e)}\n降级错误: {str(fallback_error)}"
+                if log_callback:
+                    log_callback(f"❌ 系统错误: 任务执行失败")
 
         # ===== 统一输出（三种模式共用） =====
         print("\n" + "=" * 100)
@@ -1177,6 +1288,10 @@ class MultiAgentSwarm:
         print("=" * 100)
         print(final_answer)
         print("=" * 100)
+
+        # ✅ 发送完成日志
+        if log_callback:
+            log_callback(f"✅ 任务完成 (模式: {execution_mode.upper()})")
 
         # 知识图谱蒸馏（仅 complex 模式）
         if complexity == "complex" and self.knowledge_graph:
@@ -1200,7 +1315,9 @@ class MultiAgentSwarm:
             history: List[Dict],
             tracker: TimeTracker,
             use_memory: bool,
-            memory_key: str
+            memory_key: str,
+            stream_callback=None,  # ✅ 新增
+            log_callback=None  # ✅ 新增
     ) -> str:
         """
         🔴 完整模式：全功能协作（原 solve() 的 complex 分支）
@@ -1210,12 +1327,18 @@ class MultiAgentSwarm:
         print("🔴 检测到复杂任务，启用全功能协作模式")
         print(f"{'=' * 80}\n")
 
+        # ✅ 发送日志
+        if log_callback:
+            log_callback("🔴 执行完整模式（全功能协作）")
+
         # ===== 任务分解 =====
         if self.enable_task_decomposition and self.mode == "intelligent":
             decomposition = self._decompose_task(task)
             if decomposition:
                 history.insert(0, {"speaker": "System", "content": decomposition})
                 tracker.checkpoint("2️⃣ 任务分解")
+                if log_callback:
+                    log_callback("📋 任务分解完成")
 
         # ===== 加载历史记忆 =====
         if use_memory and memory_key in self.memory:
@@ -1227,6 +1350,8 @@ class MultiAgentSwarm:
                 "speaker": "System",
                 "content": f"📚 历史记忆（{memory_key}）：\n{memory_text}"
             })
+            if log_callback:
+                log_callback(f"📚 加载历史记忆: {memory_key}")
 
         # ===== 主循环（多轮讨论 + 辩论）=====
         round_num = 0
@@ -1236,11 +1361,17 @@ class MultiAgentSwarm:
             round_num += 1
             if round_num > self.max_rounds:
                 logging.info(f"⏸️  达到最大轮次 {self.max_rounds}，停止讨论")
+                if log_callback:
+                    log_callback(f"⏸️ 达到最大轮次 {self.max_rounds}")
                 break
 
             logging.info(f"\n{'─' * 80}")
             logging.info(f"🔄 第 {round_num} 轮讨论开始")
             logging.info(f"{'─' * 80}")
+
+            # ✅ 发送轮次日志
+            if log_callback:
+                log_callback(f"🔄 第 {round_num}/{self.max_rounds} 轮讨论开始")
 
             round_start = time.time()
 
@@ -1251,7 +1382,8 @@ class MultiAgentSwarm:
                         agent.generate_response,
                         history.copy(),
                         round_num,
-                        critique_previous=(round_num > 1 and self.enable_adversarial_debate)
+                        critique_previous=(round_num > 1 and self.enable_adversarial_debate),
+                        log_callback=log_callback  # ✅ 仅传递日志（避免流式混乱）
                     ): agent
                     for agent in self.agents
                 }
@@ -1275,24 +1407,37 @@ class MultiAgentSwarm:
                                     )
                     except Exception as e:
                         logging.error(f"❌ {agent.name} 执行失败: {e}")
+                        if log_callback:
+                            log_callback(f"❌ {agent.name} 执行失败")
 
             round_elapsed = time.time() - round_start
             tracker.checkpoint(f"3️⃣ 第{round_num}轮讨论 ({round_elapsed:.1f}秒)")
 
             # ===== 对抗式辩论与自适应反思 =====
             if self.mode == "intelligent" and self.reflection_planning:
+                if log_callback:
+                    log_callback(f"🥊 启动对抗式辩论 (第 {round_num} 轮)")
+
                 quality_score, decision = self._adversarial_debate(history, round_num)
                 tracker.checkpoint(f"4️⃣ 第{round_num}轮辩论")
+
+                # ✅ 发送辩论结果
+                if log_callback:
+                    log_callback(f"📊 辩论结果: 质量 {quality_score}/100, 决策 {decision}")
 
                 if self.enable_adaptive_depth:
                     # 质量达标立即停止
                     if quality_score >= self.reflection_quality_threshold:
                         logging.info(f"✅ 质量达标 ({quality_score} >= {self.reflection_quality_threshold})，停止讨论")
+                        if log_callback:
+                            log_callback(f"✅ 质量达标 ({quality_score}分)")
                         break
 
                     # 裁判建议停止 + 质量可接受
                     if decision == "stop" and quality_score >= self.stop_quality_threshold:
                         logging.info(f"✅ 裁判建议停止 + 质量可接受 ({quality_score} >= {self.stop_quality_threshold})")
+                        if log_callback:
+                            log_callback(f"✅ 裁判建议停止 (质量 {quality_score}分)")
                         break
 
                     # 质量收敛判定
@@ -1301,6 +1446,8 @@ class MultiAgentSwarm:
                         if abs(quality_delta) < self.quality_convergence_delta:
                             logging.info(
                                 f"📉 质量收敛 (Δ={quality_delta:.1f} < {self.quality_convergence_delta})，停止讨论")
+                            if log_callback:
+                                log_callback(f"📉 质量收敛 (Δ={quality_delta:.1f})")
                             break
 
                     previous_quality = quality_score
@@ -1308,9 +1455,14 @@ class MultiAgentSwarm:
                     # 非自适应模式：仅听从裁判决策
                     if decision == "stop":
                         logging.info("✅ 裁判建议停止，结束讨论")
+                        if log_callback:
+                            log_callback("✅ 裁判建议停止")
                         break
 
         # ===== 最终综合 =====
+        if log_callback:
+            log_callback("🎯 开始最终综合")
+
         kg_context = ""
         if self.knowledge_graph:
             kg_context = self.knowledge_graph.distill(max_items=10)
@@ -1328,7 +1480,9 @@ class MultiAgentSwarm:
         final_answer = self.leader.generate_response(
             history,
             round_num + 1,
-            force_non_stream=False
+            force_non_stream=False,
+            stream_callback=stream_callback,  # ✅ 传递流式
+            log_callback=log_callback  # ✅ 传递日志
         )
 
         tracker.checkpoint("5️⃣ 最终综合")
@@ -1336,6 +1490,9 @@ class MultiAgentSwarm:
         # ===== 保存记忆 =====
         if use_memory:
             try:
+                if log_callback:
+                    log_callback("💾 保存记忆中...")
+
                 summary = self.leader.generate_response(
                     history + [{
                         "speaker": "System",
@@ -1354,8 +1511,13 @@ class MultiAgentSwarm:
                     )
 
                 tracker.checkpoint("6️⃣ 保存记忆")
+                if log_callback:
+                    log_callback("💾 记忆保存完成")
+
             except Exception as e:
                 logging.error(f"❌ 保存记忆失败: {e}")
+                if log_callback:
+                    log_callback(f"⚠️ 记忆保存失败")
 
         return final_answer
 
@@ -1439,7 +1601,13 @@ class MultiAgentSwarm:
             logging.error(f"❌ 任务分类失败: {e}，默认使用 medium")
             return "medium"
 
-    def _solve_simple(self, task: str, history: List[Dict]) -> str:
+    def _solve_simple(
+            self,
+            task: str,
+            history: List[Dict],
+            stream_callback=None,  # ✅ 新增
+            log_callback=None  # ✅ 新增
+    ) -> str:
         """
         🟢 简单模式：单 Agent 直接回答
         """
@@ -1448,17 +1616,30 @@ class MultiAgentSwarm:
         print("🟢 检测到简单任务，使用快速模式")
         print(f"{'=' * 80}\n")
 
+        # ✅ 发送日志
+        if log_callback:
+            log_callback("🟢 执行简单模式")
+
         # 直接用 Leader 回答（允许流式输出）
         answer = self.leader.generate_response(
             history,
             round_num=1,
             system_extra="请简洁、直接地回答用户问题。",
-            force_non_stream=False
+            force_non_stream=False,
+            stream_callback=stream_callback,  # ✅ 传递
+            log_callback=log_callback  # ✅ 传递
         )
 
         return answer
 
-    def _solve_medium(self, task: str, history: List[Dict], tracker: TimeTracker) -> str:
+    def _solve_medium(
+            self,
+            task: str,
+            history: List[Dict],
+            tracker: TimeTracker,
+            stream_callback=None,  # ✅ 新增
+            log_callback=None  # ✅ 新增
+    ) -> str:
         """
         🟡 中等模式：2 Agents + 单轮讨论
         """
@@ -1466,6 +1647,10 @@ class MultiAgentSwarm:
         print(f"\n{'=' * 80}")
         print("🟡 检测到中等任务，使用精简协作模式")
         print(f"{'=' * 80}\n")
+
+        # ✅ 发送日志
+        if log_callback:
+            log_callback("🟡 执行中等模式（2 Agents + 1轮）")
 
         # 选择 2 个最适合的 Agent（Leader + 1个专家）
         selected_agents = [self.leader]
@@ -1480,7 +1665,8 @@ class MultiAgentSwarm:
                 executor.submit(
                     agent.generate_response,
                     history.copy(),
-                    1
+                    1,
+                    log_callback=log_callback  # ✅ 传递日志（不传 stream 避免混乱）
                 ): agent
                 for agent in selected_agents
             }
@@ -1495,6 +1681,8 @@ class MultiAgentSwarm:
                     })
                 except Exception as e:
                     logging.error(f"❌ {agent.name} 执行失败: {e}")
+                    if log_callback:
+                        log_callback(f"❌ {agent.name} 执行失败")
 
         tracker.checkpoint("2️⃣ 单轮讨论")
 
@@ -1507,7 +1695,9 @@ class MultiAgentSwarm:
         final_answer = self.leader.generate_response(
             history,
             2,
-            force_non_stream=False
+            force_non_stream=False,
+            stream_callback=stream_callback,  # ✅ 传递流式
+            log_callback=log_callback  # ✅ 传递日志
         )
 
         tracker.checkpoint("3️⃣ 快速综合")

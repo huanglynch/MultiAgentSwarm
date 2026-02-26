@@ -3,13 +3,14 @@
 
 """
 MultiAgentSwarm WebUI - FastAPI 实现
-美观、简洁、功能完整的 Web 界面
+美观、简洁、功能完整的 Web 界面（支持真实流式输出）
 """
 
 import asyncio
 import json
 import os
 import uuid
+import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -187,9 +188,6 @@ async def get_swarm_config():
     }
 
 
-import tempfile  # 在文件开头添加这个导入
-
-
 @app.get("/api/export/{session_id}")
 async def export_session(session_id: str):
     """导出会话历史为 Markdown 格式"""
@@ -200,7 +198,7 @@ async def export_session(session_id: str):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     filename = f"conversation_{timestamp}.md"
 
-    # ✅ 修复：使用 tempfile 创建跨平台临时文件
+    # ✅ 使用 tempfile 创建跨平台临时文件
     temp_dir = tempfile.gettempdir()
     filepath = os.path.join(temp_dir, filename)
 
@@ -232,7 +230,7 @@ async def export_session(session_id: str):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket 端点（流式输出）"""
+    """WebSocket 端点（支持真实流式输出）"""
     await websocket.accept()
 
     try:
@@ -259,23 +257,78 @@ async def websocket_endpoint(websocket: WebSocket):
                 "session_id": session_id
             })
 
-            # 发送思考过程（模拟）
-            await websocket.send_json({
-                "type": "thinking",
-                "content": "🤔 正在分析问题复杂度...\n📊 选择最优智能体组合...\n🔄 启动协作推理流程..."
-            })
+            # ✅ 创建流式和日志队列
+            stream_queue = asyncio.Queue()
+            log_queue = asyncio.Queue()
+
+            # ✅ 后台任务：持续发送流式数据
+            async def stream_sender():
+                """持续发送流式数据到前端"""
+                while True:
+                    try:
+                        data = await asyncio.wait_for(stream_queue.get(), timeout=0.1)
+                        if data is None:  # 结束信号
+                            break
+                        await websocket.send_json(data)
+                    except asyncio.TimeoutError:
+                        continue
+
+            # ✅ 后台任务：持续发送日志
+            async def log_sender():
+                """持续发送日志到前端"""
+                while True:
+                    try:
+                        log_msg = await asyncio.wait_for(log_queue.get(), timeout=0.1)
+                        if log_msg is None:  # 结束信号
+                            break
+                        # 简化日志显示
+                        simplified = log_msg[:60] + "..." if len(log_msg) > 60 else log_msg
+                        await websocket.send_json({
+                            "type": "log",
+                            "content": simplified
+                        })
+                    except asyncio.TimeoutError:
+                        continue
+
+            # 启动后台任务
+            sender_task = asyncio.create_task(stream_sender())
+            log_task = asyncio.create_task(log_sender())
 
             try:
-                # 异步执行 Swarm（在后台线程中）
                 loop = asyncio.get_event_loop()
+
+                # ✅ 定义流式回调
+                def stream_callback(agent_name: str, content: str):
+                    """流式内容回调 - 将内容发送到队列"""
+                    asyncio.run_coroutine_threadsafe(
+                        stream_queue.put({
+                            "type": "stream",
+                            "agent": agent_name,
+                            "content": content
+                        }),
+                        loop
+                    )
+
+                # ✅ 定义日志回调
+                def log_callback(message: str):
+                    """日志回调 - 将日志发送到队列"""
+                    asyncio.run_coroutine_threadsafe(
+                        log_queue.put(message),
+                        loop
+                    )
+
+                # ✅ 执行 Swarm（带回调）
                 answer = await loop.run_in_executor(
                     None,
-                    swarm.solve,
-                    message,
-                    use_memory,
-                    memory_key,
-                    None,  # image_paths
-                    force_complexity
+                    lambda: swarm.solve(
+                        message,
+                        use_memory,
+                        memory_key,
+                        None,  # image_paths
+                        force_complexity,
+                        stream_callback=stream_callback,  # ✅ 传递流式回调
+                        log_callback=log_callback  # ✅ 传递日志回调
+                    )
                 )
 
                 # 保存 AI 回复
@@ -286,16 +339,26 @@ async def websocket_endpoint(websocket: WebSocket):
                 }
                 conversations[session_id].append(ai_msg)
 
-                # 发送完整答案
+                # 发送结束信号
+                await stream_queue.put(None)
+                await log_queue.put(None)
+                await sender_task
+                await log_task
+
                 await websocket.send_json({
-                    "type": "answer",
-                    "content": answer
+                    "type": "end"
                 })
 
             except Exception as e:
+                # 异常处理
+                await stream_queue.put(None)
+                await log_queue.put(None)
+                await sender_task
+                await log_task
+
                 error_msg = f"❌ 执行失败: {str(e)}"
 
-                # ✅ 修复：检查连接状态再发送
+                # ✅ 检查连接状态再发送
                 try:
                     await websocket.send_json({
                         "type": "error",
@@ -312,22 +375,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     "timestamp": datetime.now().isoformat()
                 })
 
-            # ✅ 修复：检查连接状态再发送完成标记
-            try:
-                await websocket.send_json({
-                    "type": "end"
-                })
-            except:
-                print(f"⚠️ WebSocket 已关闭，无法发送完成标记")
-                break
-
     except WebSocketDisconnect:
         print("WebSocket 断开连接")
     except Exception as e:
         print(f"WebSocket 错误: {e}")
 
 
-# ====================== HTML 模板（完整修复版）======================
+# ====================== HTML 模板（完整版）======================
 def get_html_template():
     """返回 HTML 模板"""
     return """<!DOCTYPE html>
@@ -610,40 +664,103 @@ def get_html_template():
             font-weight: bold;
         }
 
-        /* 思考过程样式 */
+        /* ✅ 思考过程样式 */
         .thinking-details {
-            margin-bottom: 12px;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            overflow: hidden;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 16px 0;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
 
         .thinking-details summary {
-            background: #f8f9fa;
-            padding: 10px 15px;
             cursor: pointer;
-            font-weight: 500;
-            color: #667eea;
+            font-weight: 600;
+            color: white;
             user-select: none;
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        .thinking-details summary:hover {
-            background: #f0f4ff;
+        .thinking-details summary::-webkit-details-marker {
+            display: none;
         }
 
-        .thinking-details[open] summary {
-            border-bottom: 1px solid #e0e0e0;
+        .thinking-details summary::before {
+            content: '▼';
+            display: inline-block;
+            transition: transform 0.3s;
         }
 
-        .thinking-content {
-            padding: 12px 15px;
-            background: white;
-            max-height: 200px;
+        .thinking-details:not([open]) summary::before {
+            transform: rotate(-90deg);
+        }
+
+        .thinking-logs {
+            margin-top: 12px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            padding: 12px;
+            max-height: 300px;
             overflow-y: auto;
-            white-space: pre-wrap;
-            font-size: 0.9em;
-            color: #666;
-            line-height: 1.6;
+        }
+
+        .log-entry {
+            padding: 6px 10px;
+            margin: 4px 0;
+            background: rgba(102, 126, 234, 0.1);
+            border-left: 3px solid #667eea;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            color: #2d3748;
+            word-break: break-word;
+        }
+
+        /* ✅ 流式消息样式 */
+        .message.streaming {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+
+        .agent-label {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .streaming-content {
+            min-height: 20px;
+        }
+
+        /* ✅ 日志滚动条美化 */
+        .thinking-logs::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .thinking-logs::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.05);
+            border-radius: 3px;
+        }
+
+        .thinking-logs::-webkit-scrollbar-thumb {
+            background: #667eea;
+            border-radius: 3px;
+        }
+
+        .thinking-logs::-webkit-scrollbar-thumb:hover {
+            background: #764ba2;
         }
 
         .message-actions {
@@ -839,21 +956,6 @@ def get_html_template():
             height: 30px;
         }
 
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
         @media (max-width: 768px) {
             .sidebar {
                 position: fixed;
@@ -990,7 +1092,9 @@ def get_html_template():
         let ws = null;
         let currentSessionId = null;
         let isProcessing = false;
-        let currentThinkingElement = null;
+        let currentStreamingDiv = null;  // ✅ 新增
+        let currentStreamingAgent = null;  // ✅ 新增
+        let thinkingDetailsElement = null;  // ✅ 新增
 
         // 配置 Marked.js
         marked.setOptions({
@@ -1027,23 +1131,37 @@ def get_html_template():
 
                 if (data.type === 'session_id') {
                     currentSessionId = data.session_id;
-                } else if (data.type === 'thinking') {
-                    // 显示思考过程（可收起）
-                    addThinkingProcess(data.content);
-                } else if (data.type === 'answer') {
-                    // 自动收起思考过程
-                    if (currentThinkingElement) {
-                        currentThinkingElement.removeAttribute('open');
+                } 
+                else if (data.type === 'log') {
+                    // ✅ 处理思考日志
+                    addThinkingLog(data.content);
+                }
+                else if (data.type === 'stream') {
+                    // ✅ 处理流式输出
+                    updateStreamingMessage(data.agent, data.content);
+                }
+                else if (data.type === 'error') {
+                    if (thinkingDetailsElement) {
+                        thinkingDetailsElement.remove();
+                        thinkingDetailsElement = null;
                     }
                     addMessage('assistant', data.content);
-                } else if (data.type === 'error') {
-                    if (currentThinkingElement) {
-                        currentThinkingElement.remove();
+                } 
+                // ✅ 修改 end 事件处理
+                else if (data.type === 'end') {
+                    // 确保流式消息已完成
+                    finalizeStreamingMessage();
+                    
+                    // 关闭思考过程
+                    if (thinkingDetailsElement) {
+                        thinkingDetailsElement.removeAttribute('open');
+                        thinkingDetailsElement = null;
                     }
-                    addMessage('assistant', data.content);
-                } else if (data.type === 'end') {
+                    
                     isProcessing = false;
                     document.getElementById('sendBtn').disabled = false;
+                    
+                    // ✅ 刷新会话列表（显示最新消息预览）
                     loadSessions();
                 }
             };
@@ -1053,6 +1171,97 @@ def get_html_template():
                 isProcessing = false;
                 document.getElementById('sendBtn').disabled = false;
             };
+        }
+
+        // ✅ 新增：添加思考日志
+        function addThinkingLog(logContent) {
+            if (!thinkingDetailsElement) {
+                // 创建思考过程容器
+                const messagesDiv = document.getElementById('messages');
+                thinkingDetailsElement = document.createElement('details');
+                thinkingDetailsElement.className = 'thinking-details';
+                thinkingDetailsElement.open = true;
+
+                thinkingDetailsElement.innerHTML = `
+                    <summary>🤔 思考过程</summary>
+                    <div class="thinking-logs"></div>
+                `;
+
+                messagesDiv.appendChild(thinkingDetailsElement);
+            }
+
+            // 添加日志条目
+            const logsDiv = thinkingDetailsElement.querySelector('.thinking-logs');
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.textContent = logContent;
+            logsDiv.appendChild(logEntry);
+
+            // 自动滚动
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // ✅ 新增：更新流式消息
+        function updateStreamingMessage(agent, content) {
+            if (!currentStreamingDiv || currentStreamingAgent !== agent) {
+                // 创建新的流式消息容器
+                const messagesDiv = document.getElementById('messages');
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message assistant streaming';
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content';
+                contentDiv.innerHTML = `
+                    <div class="agent-label">[${agent}]</div>
+                    <div class="streaming-content"></div>
+                `;
+
+                messageDiv.appendChild(contentDiv);
+                messagesDiv.appendChild(messageDiv);
+
+                currentStreamingDiv = contentDiv.querySelector('.streaming-content');
+                currentStreamingAgent = agent;
+            }
+
+            // 追加内容（先累积纯文本，然后渲染 Markdown）
+            if (!currentStreamingDiv.dataset.rawText) {
+                currentStreamingDiv.dataset.rawText = '';
+            }
+            currentStreamingDiv.dataset.rawText += content;
+
+            // 渲染 Markdown
+            currentStreamingDiv.innerHTML = marked.parse(currentStreamingDiv.dataset.rawText);
+
+            // 自动滚动
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // ✅ 新增：完成流式消息
+        function finalizeStreamingMessage() {
+            if (currentStreamingDiv) {
+                // 添加操作按钮
+                const actionsDiv = document.createElement('div');
+                actionsDiv.className = 'message-actions';
+                actionsDiv.innerHTML = `
+                    <button onclick="copyMessage(this)">📋 复制</button>
+                    <button onclick="deleteMessage(this)">🗑️ 删除</button>
+                `;
+                currentStreamingDiv.parentElement.appendChild(actionsDiv);
+        
+                // 移除 streaming 类
+                const messageDiv = currentStreamingDiv.closest('.message');
+                messageDiv.classList.remove('streaming');
+        
+                // ✅ 新增：标记为已完成（用于后续识别）
+                messageDiv.dataset.finalized = 'true';
+        
+                // 清除引用
+                delete currentStreamingDiv.dataset.rawText;
+                currentStreamingDiv = null;
+                currentStreamingAgent = null;
+            }
         }
 
         async function sendMessage() {
@@ -1087,35 +1296,6 @@ def get_html_template():
                 memory_key: 'default',
                 force_complexity: forceComplexity
             }));
-        }
-
-        function addThinkingProcess(content) {
-            const messagesDiv = document.getElementById('messages');
-            const details = document.createElement('details');
-            details.className = 'thinking-details';
-            details.open = true; // 默认展开
-
-            const summary = document.createElement('summary');
-            summary.textContent = '🧠 AI 思考过程';
-
-            const thinkingContent = document.createElement('div');
-            thinkingContent.className = 'thinking-content';
-            thinkingContent.textContent = content;
-
-            details.appendChild(summary);
-            details.appendChild(thinkingContent);
-
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message assistant';
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-            contentDiv.appendChild(details);
-            messageDiv.appendChild(contentDiv);
-
-            messagesDiv.appendChild(messageDiv);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-
-            currentThinkingElement = details;
         }
 
         function addMessage(role, content) {
@@ -1164,7 +1344,6 @@ def get_html_template():
                 event.preventDefault();
                 sendMessage();
             }
-            // Enter 单独按下时只是换行，不做任何处理
         }
 
         function clearChat() {
@@ -1187,7 +1366,9 @@ def get_html_template():
 
         function createNewSession() {
             currentSessionId = null;
-            currentThinkingElement = null;
+            currentStreamingDiv = null;
+            currentStreamingAgent = null;
+            thinkingDetailsElement = null;
             document.getElementById('messages').innerHTML = '';
             addMessage('assistant', '👋 你好！我是 MultiAgentSwarm，一个多智能体协作系统。有什么可以帮你的吗？');
         }
@@ -1219,7 +1400,9 @@ def get_html_template():
                 const data = await response.json();
 
                 currentSessionId = sessionId;
-                currentThinkingElement = null;
+                currentStreamingDiv = null;
+                currentStreamingAgent = null;
+                thinkingDetailsElement = null;
                 document.getElementById('messages').innerHTML = '';
 
                 data.messages.forEach(function(msg) {
