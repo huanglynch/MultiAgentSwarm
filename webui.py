@@ -19,6 +19,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from fastapi import UploadFile, File
+from pathlib import Path
 
 # 导入你的 Swarm 系统
 from multi_agent_swarm_v3 import MultiAgentSwarm
@@ -277,7 +279,6 @@ async def websocket_endpoint(websocket: WebSocket):
             })
 
             # ==================== 3. 构建智能对话历史 ====================
-            # ==================== 3. 构建智能对话历史 ====================
             history_context = ""
             history_lines = []  # ✅ 提前初始化
 
@@ -359,6 +360,102 @@ async def websocket_endpoint(websocket: WebSocket):
             User: {message}"""
             else:
                 full_message = message
+
+            # ✅✅✅ 新增：自动解析附件内容 ✅✅✅
+            if "📎 附件:" in message:
+                try:
+                    # 提取文件路径
+                    file_paths = [
+                        line.strip("- ").strip()
+                        for line in message.split("📎 附件:")[-1].split("\n")
+                        if line.strip().startswith("- ")
+                    ]
+
+                    if file_paths:
+                        await websocket.send_json({
+                            "type": "log",
+                            "content": f"📂 检测到 {len(file_paths)} 个附件，正在解析..."
+                        })
+
+                        # 自动读取文件内容
+                        file_contents = []
+                        MAX_PREVIEW_LENGTH = 10000  # ✅ 统一定义最大预览长度
+
+                        for path in file_paths:
+                            try:
+                                path = path.strip()
+
+                                # ===== PDF 处理 =====
+                                if path.endswith('.pdf'):
+                                    result = swarm.tool_registry['pdf_reader']['func'](file_path=path)
+                                    if result.get('success'):
+                                        content = result.get('content', '')
+                                        truncated = False
+
+                                        # ✅ 截断逻辑
+                                        if len(content) > MAX_PREVIEW_LENGTH:
+                                            content = content[:MAX_PREVIEW_LENGTH]
+                                            truncated = True
+
+                                        file_contents.append(
+                                            f"### 📄 {Path(path).name} (PDF)\n"
+                                            f"页数: {result.get('pages', '未知')}\n"
+                                            f"预览长度: {len(content)} 字符{'（已截断）' if truncated else ''}\n"
+                                            f"内容:\n{content}"
+                                            + (
+                                                "\n\n💡 **提示**: 文件过长已截断，如需完整分析请明确要求使用 `summarize_long_file` 工具。" if truncated else "")
+                                        )
+                                    else:
+                                        file_contents.append(
+                                            f"### ❌ {Path(path).name} 解析失败: {result.get('error', '未知错误')}")
+
+                                # ===== TXT/MD 处理 =====
+                                elif path.endswith(('.txt', '.md')):
+                                    result = swarm.tool_registry['read_file']['func'](file_path=path)
+                                    if result.get('success'):
+                                        content = result.get('content', '')
+                                        truncated = False
+
+                                        # ✅ 截断逻辑
+                                        if len(content) > MAX_PREVIEW_LENGTH:
+                                            content = content[:MAX_PREVIEW_LENGTH]
+                                            truncated = True
+
+                                        file_contents.append(
+                                            f"### 📄 {Path(path).name}\n"
+                                            f"大小: {result.get('length', 0)} 字符\n"
+                                            f"预览长度: {len(content)} 字符{'（已截断）' if truncated else ''}\n"
+                                            f"内容:\n{content}"
+                                            + (
+                                                "\n\n💡 **提示**: 文件过长已截断，如需完整分析请明确要求使用 `summarize_long_file` 工具。" if truncated else "")
+                                        )
+                                    else:
+                                        file_contents.append(
+                                            f"### ❌ {Path(path).name} 读取失败: {result.get('error', '未知错误')}")
+
+                                # ===== 图片处理 =====
+                                elif path.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+                                    file_contents.append(f"### 🖼️ {Path(path).name} (图片)\n路径: {path}")
+
+                            except Exception as e:
+                                file_contents.append(f"### ❌ {Path(path).name} 处理失败: {str(e)}")
+
+                        # 将文件内容附加到完整消息（在历史上下文之后）
+                        if file_contents:
+                            file_section = "\n\n=== 📄 附件内容 ===\n" + "\n\n".join(file_contents)
+                            full_message = full_message + file_section
+
+                            await websocket.send_json({
+                                "type": "log",
+                                "content": f"✅ 附件解析完成，总计 {len(file_contents)} 个文件"
+                            })
+
+                except Exception as e:
+                    print(f"⚠️ 附件解析失败: {e}")
+                    await websocket.send_json({
+                        "type": "log",
+                        "content": f"⚠️ 附件解析失败: {str(e)[:50]}"
+                    })
 
             # ==================== 4. 创建异步队列 ====================
             stream_queue = asyncio.Queue()
@@ -520,6 +617,63 @@ async def websocket_endpoint(websocket: WebSocket):
             })
         except:
             pass
+
+
+# ====================== 新增：文件上传端点 ======================
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """
+    接收文件上传并保存到临时目录
+    支持：PDF、TXT、MD、图片
+    """
+    try:
+        # ✅ 新增：文件大小限制
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+        # 验证文件类型
+        ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.png', '.jpg', '.jpeg', '.gif', '.bmp'}
+        file_ext = Path(file.filename).suffix.lower()
+
+        if file_ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的文件类型: {file_ext}"
+            )
+
+        # 保存到临时目录（确保路径安全）
+        upload_dir = Path("uploads")
+        upload_dir.mkdir(exist_ok=True)
+
+        # 生成安全文件名（防止路径注入）
+        safe_filename = f"{uuid.uuid4().hex[:8]}_{Path(file.filename).name}"
+        file_path = upload_dir / safe_filename
+
+        # ✅ 读取文件并检查大小
+        content = await file.read()
+
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"文件过大（最大 {MAX_FILE_SIZE / (1024 * 1024):.0f}MB）"
+            )
+
+        # 保存文件
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # 返回相对路径（供 Swarm 使用）
+        return {
+            "status": "ok",
+            "filename": safe_filename,
+            "path": str(file_path),
+            "type": file_ext,
+            "size": len(content)
+        }
+
+    except HTTPException:
+        raise  # ✅ 直接抛出 HTTP 异常
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
 
 
 # ====================== HTML 模板（完整版）======================
@@ -934,6 +1088,7 @@ def get_html_template():
             color: #333;
         }
 
+        /* ✅ 修改输入区域样式 */
         .input-area {
             padding: 20px;
             background: white;
@@ -943,7 +1098,16 @@ def get_html_template():
         .input-wrapper {
             display: flex;
             gap: 10px;
-            align-items: flex-end;
+            align-items: stretch;  /* ✅ 改为 stretch，确保按钮等高 */
+        }
+
+        /* ✅ 新增：文件列表容器 */
+        .file-list-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            min-height: 0;  /* ✅ 没有文件时不占空间 */
         }
 
         #messageInput {
@@ -967,22 +1131,42 @@ def get_html_template():
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
 
-        #sendBtn {
-            padding: 15px 30px;
+        /* ✅ 统一按钮样式（上传 + 发送）*/
+        .action-btn {
+            padding: 15px 24px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            border-radius: 25px;
+            border-radius: 15px;  /* ✅ 改为 15px 统一风格 */
             cursor: pointer;
             font-size: 14px;
-            font-weight: bold;
+            font-weight: 600;  /* ✅ 改为 600 更统一 */
             transition: all 0.3s;
-            height: 50px;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            min-width: 120px;  /* ✅ 确保按钮宽度一致 */
         }
 
-        #sendBtn:hover:not(:disabled) {
+        .action-btn:hover:not(:disabled) {
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ✅ 上传按钮特殊样式（可选：区分颜色）*/
+        .upload-btn {
+            background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+        }
+
+        .upload-btn:hover:not(:disabled) {
+            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4);
         }
 
         #sendBtn:disabled {
@@ -1142,14 +1326,39 @@ def get_html_template():
             <div class="messages" id="messages"></div>
 
             <div class="input-area">
+                <!-- ✅ 已上传文件列表 -->
+                <div class="file-list-container" id="uploadedFiles"></div>
+                
+                <!-- ✅ 输入框 + 按钮（并排布局）-->
                 <div class="input-wrapper">
                     <textarea 
                         id="messageInput" 
-                        placeholder="输入你的问题...（Enter 换行，Ctrl+Enter 发送）" 
+                        placeholder="输入你的问题...（Enter 换行, Ctrl+Enter 发送）" 
                         onkeydown="handleKeyDown(event)"
                         rows="3"
                     ></textarea>
-                    <button id="sendBtn" onclick="sendMessage()">发送 🚀</button>
+                    
+                    <!-- ✅ 上传按钮 -->
+                    <button 
+                        class="action-btn upload-btn" 
+                        onclick="document.getElementById('fileInput').click()"
+                        title="支持 PDF、TXT、MD、图片（最大 10MB）"
+                    >
+                        📎 上传附件
+                    </button>
+                    <input 
+                        type="file" 
+                        id="fileInput" 
+                        accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.gif,.bmp" 
+                        multiple 
+                        style="display: none;" 
+                        onchange="handleFileUpload(event)"
+                    >
+                    
+                    <!-- ✅ 发送按钮 -->
+                    <button id="sendBtn" class="action-btn" onclick="sendMessage()">
+                        发送 🚀
+                    </button>
                 </div>
             </div>
         </div>
@@ -1413,20 +1622,90 @@ def get_html_template():
             }
         }
 
+        // ==================== 新增：文件上传逻辑 ====================
+        let uploadedFilePaths = [];  // 存储已上传文件的路径
+        
+        async function handleFileUpload(event) {
+            const files = event.target.files;
+            const uploadedFilesDiv = document.getElementById('uploadedFiles');
+            
+            for (let file of files) {
+                // 1. 显示上传中状态
+                const fileTag = document.createElement('div');
+                fileTag.style.cssText = 'padding: 8px 12px; background: #e0e0e0; border-radius: 8px; display: flex; align-items: center; gap: 8px;';
+                fileTag.innerHTML = `⏳ ${file.name} (上传中...)`;
+                uploadedFilesDiv.appendChild(fileTag);
+                
+                try {
+                    // 2. 上传文件
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    const response = await fetch('/api/upload', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === 'ok') {
+                        // 3. 更新显示为成功状态
+                        fileTag.innerHTML = `
+                            ✅ ${file.name} (${formatBytes(data.size)})
+                            <button onclick="removeUploadedFile('${data.path}', this.parentElement)" style="background: none; border: none; cursor: pointer; font-size: 16px;">❌</button>
+                        `;
+                        fileTag.style.background = '#d4edda';
+                        
+                        // 4. 保存路径（用于发送消息时附带）
+                        uploadedFilePaths.push(data.path);
+                    } else {
+                        throw new Error(data.detail || '上传失败');
+                    }
+                } catch (error) {
+                    fileTag.innerHTML = `❌ ${file.name} (失败)`;
+                    fileTag.style.background = '#f8d7da';
+                    console.error('上传失败:', error);
+                }
+            }
+            
+            // 清空 input（允许重复上传同名文件）
+            event.target.value = '';
+        }
+        
+        function removeUploadedFile(path, element) {
+            uploadedFilePaths = uploadedFilePaths.filter(p => p !== path);
+            element.remove();
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+        
+        // ==================== 修改：发送消息时附带文件 ====================
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             const message = input.value.trim();
-
-            if (!message || isProcessing) return;
-
+        
+            if (!message && uploadedFilePaths.length === 0) return;  // ✅ 允许仅发送文件
+            if (isProcessing) return;
+        
             isProcessing = true;
             document.getElementById('sendBtn').disabled = true;
-
-            addMessage('user', message);
+        
+            // 构建消息（附加文件信息）
+            let fullMessage = message;
+            if (uploadedFilePaths.length > 0) {
+                const fileList = uploadedFilePaths.map(p => `- ${p}`).join('\n');
+                fullMessage = `${message}\n\n📎 附件:\n${fileList}`;
+            }
+        
+            addMessage('user', fullMessage);
             input.value = '';
-
+        
             connectWebSocket();
-
+        
             await new Promise(function(resolve) {
                 const checkConnection = setInterval(function() {
                     if (ws.readyState === WebSocket.OPEN) {
@@ -1435,19 +1714,23 @@ def get_html_template():
                     }
                 }, 100);
             });
-
+        
             const forceComplexity = document.getElementById('force_complexity').value || null;
-
+        
             ws.send(JSON.stringify({
-                message: message,
+                message: fullMessage,  // ✅ 包含文件路径的完整消息
                 session_id: currentSessionId,
                 use_memory: false,
                 memory_key: 'default',
                 force_complexity: forceComplexity
             }));
+        
+            // 清空已上传文件列表
+            uploadedFilePaths = [];
+            document.getElementById('uploadedFiles').innerHTML = '';
         }
 
-        // 前端 HTML 模板中的 addMessage 函数
+        // 前端 HTML 模板中的 addMessage 函数（增强版）
         function addMessage(role, content) {
             const messagesDiv = document.getElementById('messages');
             const messageDiv = document.createElement('div');
@@ -1456,7 +1739,60 @@ def get_html_template():
             const contentDiv = document.createElement('div');
             contentDiv.className = 'message-content';
         
-            if (role === 'assistant') {
+            // ✅ 新增：解析附件并显示卡片
+            if (role === 'user' && content.includes('📎 附件:')) {
+                const parts = content.split('📎 附件:');
+                const mainText = parts[0].trim();
+                const attachmentSection = parts[1] || '';
+                
+                // 提取附件列表
+                const attachmentLines = attachmentSection.split('\n').filter(line => line.trim().startsWith('- '));
+                
+                // 构建消息内容
+                let htmlContent = '';
+                
+                // 主文本
+                if (mainText) {
+                    htmlContent += `<div style="margin-bottom: 12px;">${mainText}</div>`;
+                }
+                
+                // 附件卡片
+                if (attachmentLines.length > 0) {
+                    htmlContent += '<div style="margin-top: 12px;">';
+                    attachmentLines.forEach(line => {
+                        const path = line.replace('- ', '').trim();
+                        const filename = path.split('/').pop();
+                        const fileExt = filename.split('.').pop().toLowerCase();
+                        
+                        // 根据文件类型显示不同图标
+                        let icon = '📎';
+                        if (fileExt === 'pdf') icon = '📄';
+                        else if (['txt', 'md'].includes(fileExt)) icon = '📝';
+                        else if (['png', 'jpg', 'jpeg', 'gif', 'bmp'].includes(fileExt)) icon = '🖼️';
+                        
+                        htmlContent += `
+                            <div class="attachment-card" style="
+                                background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+                                padding: 10px 14px;
+                                border-radius: 10px;
+                                margin: 6px 0;
+                                border-left: 3px solid #667eea;
+                                display: flex;
+                                align-items: center;
+                                gap: 8px;
+                            ">
+                                <span style="font-size: 20px;">${icon}</span>
+                                <strong style="color: #667eea;">${filename}</strong>
+                            </div>
+                        `;
+                    });
+                    htmlContent += '</div>';
+                }
+                
+                contentDiv.innerHTML = htmlContent;
+            } 
+            // ✅ 原有逻辑（非附件消息）
+            else if (role === 'assistant') {
                 contentDiv.innerHTML = marked.parse(content);
             } else {
                 contentDiv.textContent = content;
@@ -1476,13 +1812,66 @@ def get_html_template():
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
+        // ==================== 改进版复制函数（自动选中 + 干净复制）====================
         function copyMessage(btn) {
-            const content = btn.closest('.message-content').cloneNode(true);
-            content.querySelector('.message-actions').remove();
-            const text = content.textContent || content.innerText;
-            navigator.clipboard.writeText(text);
-            btn.textContent = '✅ 已复制';
-            setTimeout(function() { btn.textContent = '📋 复制'; }, 2000);
+            const messageContent = btn.closest('.message-content');
+            if (!messageContent) return;
+        
+            // 1. 准备干净文本（排除按钮、Agent标签，优先使用流式原始文本）
+            const tempClone = messageContent.cloneNode(true);
+            tempClone.querySelectorAll('.message-actions, .agent-label').forEach(el => el.remove());
+            
+            let textToCopy = '';
+            const streamingDiv = messageContent.querySelector('.streaming-content');
+            if (streamingDiv && streamingDiv.dataset.rawText) {
+                textToCopy = streamingDiv.dataset.rawText;   // 流式时用原始累积文本（更准确）
+            } else {
+                textToCopy = tempClone.textContent.trim() || tempClone.innerText.trim();
+            }
+        
+            // 2. 执行复制
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                // 3. 自动选中消息内容（视觉高亮）
+                selectAllMessageContent(messageContent);
+        
+                // 4. 按钮反馈
+                const originalText = btn.textContent;
+                btn.textContent = '✅ 已复制';
+                btn.style.backgroundColor = '#4ade80';
+                btn.style.color = '#fff';
+        
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.backgroundColor = '';
+                    btn.style.color = '';
+                    window.getSelection().removeAllRanges();   // 自动取消选中
+                }, 1800);
+            }).catch(err => {
+                console.error('复制失败:', err);
+                const originalText = btn.textContent;
+                btn.textContent = '❌ 失败';
+                setTimeout(() => { btn.textContent = originalText; }, 1500);
+            });
+        }
+        
+        // ==================== 新增：视觉选中函数 ====================
+        function selectAllMessageContent(contentElement) {
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+        
+            const range = document.createRange();
+            let target = contentElement.querySelector('.streaming-content') || contentElement;
+        
+            // 跳过 Agent 标签，只选中真正的内容部分
+            const agentLabel = contentElement.querySelector('.agent-label');
+            if (agentLabel && target === contentElement) {
+                range.setStartAfter(agentLabel);
+                range.setEnd(contentElement, contentElement.childNodes.length);
+            } else {
+                range.selectNodeContents(target);
+            }
+        
+            selection.addRange(range);
         }
 
         function deleteMessage(btn) {
@@ -1539,7 +1928,7 @@ def get_html_template():
                     div.className = 'session-item';
                     if (session.id === currentSessionId) div.classList.add('active');
                     div.innerHTML = '<div style="font-weight: bold; margin-bottom: 5px;">💬 会话 ' + session.id.slice(0, 8) + '</div><div style="font-size: 12px; color: #999;">' + session.last_message + '...</div>';
-                    div.onclick = function() { loadSession(session.id); };
+                    div.onclick = function(e) { loadSession(session.id, e); };
                     listDiv.appendChild(div);
                 });
             } catch (error) {
@@ -1547,27 +1936,45 @@ def get_html_template():
             }
         }
 
-        async function loadSession(sessionId) {
+        async function loadSession(sessionId, e = null) {
             try {
                 const response = await fetch('/api/session/' + sessionId);
                 const data = await response.json();
-
+        
                 currentSessionId = sessionId;
                 currentStreamingDiv = null;
                 currentStreamingAgent = null;
                 thinkingDetailsElement = null;
                 document.getElementById('messages').innerHTML = '';
-
+        
+                // 渲染历史消息
                 data.messages.forEach(function(msg) {
                     addMessage(msg.role, msg.content);
                 });
-
+        
+                // 清除所有 active 状态
                 document.querySelectorAll('.session-item').forEach(function(item) {
                     item.classList.remove('active');
                 });
-                event.target.closest('.session-item').classList.add('active');
+        
+                // 安全设置当前会话为 active（兼容直接调用和点击调用）
+                if (e && e.target) {
+                    const clickedItem = e.target.closest('.session-item');
+                    if (clickedItem) {
+                        clickedItem.classList.add('active');
+                    }
+                } else if (currentSessionId) {
+                    // 兜底：通过 ID 查找并激活（防止点击事件丢失）
+                    document.querySelectorAll('.session-item').forEach(function(item) {
+                        if (item.textContent.includes(currentSessionId.slice(0, 8))) {
+                            item.classList.add('active');
+                        }
+                    });
+                }
+        
             } catch (error) {
                 console.error('加载会话失败:', error);
+                alert('加载会话失败，请刷新页面重试');
             }
         }
 
