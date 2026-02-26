@@ -1162,33 +1162,33 @@ class MultiAgentSwarm:
         """
         tracker = TimeTracker()
         tracker.start()
-
         logging.info(f"\n{'=' * 80}")
-        logging.info(f"📋 新任务: {task}")
-        logging.info(f"{'=' * 80}")
+        logging.info(f"📋 新任务: {task[:100]}{'...' if len(task) > 100 else ''}")
 
-        print(f"\n{'=' * 80}")
-        print(f"🚀 任务开始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'=' * 80}\n")
+        # 🔥【核心修复】仅 12 行，彻底解决历史污染
+        # 目的：分类器永远只看到“当前用户这一句意图”，历史只用于后续生成
+        classification_task = task
+        if isinstance(task, str) and "=== 💬 当前问题 ===" in task:
+            try:
+                # 精准剥离 WebUI 前缀，只保留当前问题（最干净）
+                classification_task = task.split("=== 💬 当前问题 ===")[-1].strip()
+                if classification_task.startswith("User:") or classification_task.startswith("User："):
+                    classification_task = classification_task.split(":", 1)[-1].strip()
+                # 安全截断（防止极端长查询）
+                classification_task = classification_task[:300]
+            except Exception:  # ← 加上 Exception
+                classification_task = task[:200]  # 兜底
 
-        # ✅ 发送开始日志
-        if log_callback:
-            log_callback("🚀 任务开始")
+        # logging.info(f"📊 分类使用纯查询: {classification_task[:80]}...")
+        logging.info(f"📊 分类使用纯查询: {classification_task[:80]}{'...' if len(classification_task) > 80 else ''}")
 
-        # ✨✨✨ 核心：智能任务分类（带降级保护）✨✨✨
+        # ===== 下面这行改成用 classification_task =====
         try:
             if self.intelligent_routing_enabled:
-                # 优先级：方法参数 > 配置文件 > 自动判断
-                complexity = force_complexity or self.force_complexity or self._classify_task_complexity(task)
-
-                # 验证复杂度值
-                if complexity not in ["simple", "medium", "complex"]:
-                    logging.warning(f"⚠️ 无效的复杂度值: {complexity}，回退到自动判断")
-                    complexity = self._classify_task_complexity(task)
+                complexity = (force_complexity or
+                              self.force_complexity or
+                              self._classify_task_complexity(classification_task))  # ← 关键修改
             else:
-                logging.info("🔴 智能路由已禁用，使用完整模式")
-                if log_callback:
-                    log_callback("🔴 智能路由已禁用，使用完整模式")
                 complexity = "complex"
 
             tracker.checkpoint("1️⃣ 任务分类")
@@ -1529,10 +1529,17 @@ class MultiAgentSwarm:
         # 快速规则过滤（0ms，无API调用）
         task_lower = task.lower().strip()
 
+        # 新增：对话跟进场景（“继续”“详细说说”“再解释一下”）强制 medium，防止简单问题被误判 complex
+        if any(kw in task_lower for kw in ["继续", "详细", "再", "然后", "为什么", "怎么", "解释一下",
+                                           "more details", "elaborate", "next"]):
+            if len(task) < 150:  # 短跟进一定是 medium
+                logging.info("🟡 对话跟进 → MEDIUM 模式")
+                return "medium"
+
         # 简单任务特征（直接判定）
         simple_patterns = [
             # 问候类
-            len(task) < 20 and any(word in task_lower for word in ["你好", "hi", "hello", "hey", "谢谢", "thank"]),
+            len(task) < 20 and any(word in task_lower for word in ["你好", "hi", "hello", "hey", "谢谢", "thank", "嘿", "thank", "ok", "好的"]),
             # 简单问答
             task.endswith("?") and len(task) < 30,
             # 单一查询
