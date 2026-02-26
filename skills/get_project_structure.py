@@ -29,3 +29,26 @@ def tool_function(max_depth: int = 3, max_files_per_dir: int = 20):
 
     walk(root, 0)
     return "\n".join(result[:300])  # 严格限长，防止token爆炸
+
+tool_schema = {
+    "type": "function",
+    "function": {
+        "name": "get_project_structure",
+        "description": "获取项目完整目录结构树 - 永远作为文件探索的第一步！任何需要了解项目布局的任务都必须先调用此工具。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "max_depth": {
+                    "type": "integer",
+                    "description": "最大遍历深度（建议 2-4）",
+                    "default": 3
+                },
+                "max_files_per_dir": {
+                    "type": "integer",
+                    "description": "每个目录最多显示的文件数量（防止输出过长）",
+                    "default": 15
+                }
+            }
+        }
+    }
+}
