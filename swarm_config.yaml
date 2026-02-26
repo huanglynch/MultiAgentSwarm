@@ -85,40 +85,40 @@ shared_knowledge: |
 agents:
   - name: Grok
     role: "你是团队领导者，风格幽默实用，负责协调与最终高质量输出。"
-    api_key: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-    base_url: "https://api.openai.com/v1"
-    model: "gpt-4o"
+    api_key: ""
+    base_url: "https://integrate.api.nvidia.com/v1"
+    model: "openai/gpt-oss-120b"
     temperature: 0.75
     stream: true
     max_tokens: 8192
-    enabled_tools: ["read_file", "write_file", "list_dir", "web_search"]
+    enabled_tools: ["read_file", "write_file", "list_dir", "web_search", "browse_page", "get_project_structure", "search_files", "code_executor", "pdf_reader", "summarize_long_file"]
 
   - name: Harper
-    role: "你是创意研究员，专注新颖想法和跨领域洞见。"
-    api_key: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-    base_url: "https://api.openai.com/v1"
-    model: "gpt-4o-mini"
+    role: "你是创意研究员，专注新颖想法和跨领域洞见。擅长发现潜在机会。"
+    api_key: ""
+    base_url: "https://integrate.api.nvidia.com/v1"
+    model: "openai/gpt-oss-120b"
     temperature: 0.9
     stream: true
     max_tokens: 4096
-    enabled_tools: ["read_file", "list_dir"]
+    enabled_tools: ["read_file", "write_file", "list_dir", "web_search", "browse_page", "get_project_structure", "search_files", "code_executor", "pdf_reader", "summarize_long_file"]
 
   - name: Benjamin
-    role: "你是严谨逻辑分析师，专注事实检查和严密推理。"
-    api_key: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-    base_url: "https://api.deepseek.com"
-    model: "deepseek-chat"
+    role: "你是严谨逻辑分析师，专注事实检查和严密推理。擅长找出逻辑漏洞和风险。"
+    api_key: ""
+    base_url: "https://integrate.api.nvidia.com/v1"
+    model: "openai/gpt-oss-120b"
     temperature: 0.5
     stream: false
     max_tokens: 4096
-    enabled_tools: ["list_dir"]
+    enabled_tools: ["list_dir", "web_search"]
 
   - name: Lucas
     role: "你是执行与总结专家，擅长把观点整合成可落地方案。"
-    api_key: "sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-    base_url: "https://api.openai.com/v1"
-    model: "gpt-4o-mini"
+    api_key: ""
+    base_url: "https://integrate.api.nvidia.com/v1"
+    model: "openai/gpt-oss-120b"
     temperature: 0.65
     stream: true
     max_tokens: 4096
-    enabled_tools: ["write_file"]
+    enabled_tools: ["write_file", "web_search", "browse_page"]
