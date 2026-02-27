@@ -226,14 +226,21 @@
         }
 
         .attachment-card {
-            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-            padding: 10px 14px;
-            border-radius: 10px;
-            margin: 6px 0;
-            border-left: 3px solid #667eea;
+            background: #ffffff;           /* 纯白底，极高对比 */
+            color: #0f172a;
+            border: 2px solid #0ea5e9;
+            border-left-width: 6px;        /* 粗左边条，超级醒目 */
+            box-shadow: 0 3px 10px rgba(14, 165, 233, 0.25);
+            padding: 12px 16px;
+            border-radius: 12px;
+            margin: 8px 0;
             display: flex;
             align-items: center;
             gap: 8px;
+        }
+        .attachment-card strong {
+            color: #0369a1;
+            font-weight: 700;
         }
 
         #messageInput {
@@ -259,7 +266,7 @@
 
         .action-btn {
             padding: 15px 24px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #0ea5e9 0%, #0284c8 100%);  /* 清新天空蓝，简洁现代 */
             color: white;
             border: none;
             border-radius: 15px;
@@ -747,10 +754,16 @@
             isProcessing = true;
             document.getElementById('sendBtn').disabled = true;
 
-            let fullMessage = message;
+            let fullMessage = message.trim();
+
+            // 关键修复：只上传附件时自动补充清晰问题（防止空消息 + 引导Agent直接总结）
+            if (!fullMessage && uploadedFilePaths.length > 0) {
+                fullMessage = "请仔细分析这个PDF附件的主要内容，给出结构化总结、关键点提取和专业建议。";
+            }
+
             if (uploadedFilePaths.length > 0) {
                 const fileList = uploadedFilePaths.map(function(p) { return '- ' + p; }).join('\n');
-                fullMessage = message + '\n\n📎 附件:\n' + fileList;
+                fullMessage += '\n\n📎 附件:\n' + fileList;
             }
 
             addMessage('user', fullMessage);

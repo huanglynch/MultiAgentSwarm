@@ -18,6 +18,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Uplo
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+# 在文件顶部添加这些 import（如果没有）
+import re
+import unicodedata
+from pathlib import Path
 
 # 导入你的 Swarm 系统
 from multi_agent_swarm_v3 import MultiAgentSwarm
@@ -204,47 +208,58 @@ async def export_session(session_id: str):
         raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
 
 
+# ==================== 新增：文件名净化函数 ====================
+def sanitize_filename(original_name: str) -> str:
+    """把中文、空格、特殊符号全部转为安全英文"""
+    # 1. 中文转拼音（可选，更友好）或直接转 ASCII
+    name = unicodedata.normalize('NFKD', original_name)
+    name = ''.join(c for c in name if not unicodedata.combining(c))
+
+    # 2. 只保留安全字符
+    name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)  # 空格、中文等 → _
+    name = re.sub(r'_{2,}', '_', name)  # 多个下划线合并
+    name = name.strip('_')
+
+    # 3. 如果全被清理掉了，就给个默认名
+    if not name:
+        name = "file"
+    return name.lower()  # 统一小写，更美观
+
+
+# ==================== 修改 upload_file 函数 ====================
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """接收文件上传并保存到临时目录"""
     try:
-        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+        MAX_FILE_SIZE = 10 * 1024 * 1024
         ALLOWED_EXTENSIONS = {'.pdf', '.txt', '.md', '.png', '.jpg', '.jpeg', '.gif', '.bmp'}
-        file_ext = Path(file.filename).suffix.lower()
 
+        file_ext = Path(file.filename).suffix.lower()
         if file_ext not in ALLOWED_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"不支持的文件类型: {file_ext}"
-            )
+            raise HTTPException(status_code=400, detail=f"不支持的文件类型: {file_ext}")
+
+        # === 关键修改：自动净化文件名 ===
+        stem = Path(file.filename).stem
+        safe_stem = sanitize_filename(stem)
+        safe_filename = f"{uuid.uuid4().hex[:8]}_{safe_stem}{file_ext}"
 
         upload_dir = Path("uploads")
         upload_dir.mkdir(exist_ok=True)
-
-        safe_filename = f"{uuid.uuid4().hex[:8]}_{Path(file.filename).name}"
         file_path = upload_dir / safe_filename
 
         content = await file.read()
-
         if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail=f"文件过大（最大 {MAX_FILE_SIZE / (1024 * 1024):.0f}MB）"
-            )
+            raise HTTPException(status_code=413, detail=f"文件过大（最大10MB）")
 
         with open(file_path, "wb") as f:
             f.write(content)
 
         return {
             "status": "ok",
-            "filename": safe_filename,
+            "filename": safe_filename,  # 返回净化后的名字
             "path": str(file_path),
             "type": file_ext,
             "size": len(content)
         }
-
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
 
