@@ -8,6 +8,7 @@ swarm:
   num_agents: 4                          # 使用的 Agent 数量
   max_concurrent_agents: 2               # 最大并发执行的 Agent 数量
   max_rounds: 12                         # 最大讨论轮次
+  max_tool_iterations: 10                 # 最大工具使用次数（推荐 6~10，8 是最佳平衡点）
 
   reflection_planning: true              # 是否启用反思机制
 
