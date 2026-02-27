@@ -492,6 +492,19 @@
 
             <div class="input-area">
                 <div class="file-list-container" id="uploadedFiles"></div>
+                <!-- ✅ 中止按钮（默认隐藏）-->
+                <div class="control-buttons" style="display: flex; gap: 10px; margin-bottom: 12px; justify-content: flex-end;">
+                    <!-- ✅ 推荐写法（确保红色生效）-->
+                    <button
+                        id="cancelBtn"
+                        class="action-btn"
+                        onclick="cancelTask()"
+                        style="background: #ef4444 !important; display: none; min-width: 140px;"
+                        disabled
+                    >
+                        ⏸️ 中止任务
+                    </button>
+                </div>
 
                 <div class="input-wrapper">
                     <textarea
@@ -725,6 +738,11 @@
                     isProcessing = false;
                     document.getElementById('sendBtn').disabled = false;
                     loadSessions();
+                    // ✅ 隐藏中止按钮
+                    const cancelBtn = document.getElementById('cancelBtn');
+                    cancelBtn.style.display = 'none';
+                    cancelBtn.textContent = '⏸️ 中止任务';
+                    cancelBtn.disabled = false;
                 }
             };
 
@@ -758,16 +776,22 @@
             isProcessing = true;
             document.getElementById('sendBtn').disabled = true;
 
+            // ✅ 显示中止按钮
+            const cancelBtn = document.getElementById('cancelBtn');
+            cancelBtn.style.display = 'inline-flex';
+            cancelBtn.disabled = false;
+
             let fullMessage = message.trim();
 
             if (!fullMessage && uploadedFilePaths.length > 0) {
-                fullMessage = "请仔细分析这个PDF附件的主要内容，给出结构化总结、关键点提取和专业建议。";
+                fullMessage = "请仔细分析这个PDF附件的主要内容,给出结构化总结、关键点提取和专业建议。";
             }
 
             // 二次校验
             if (!fullMessage && uploadedFilePaths.length === 0) {
                 isProcessing = false;
                 document.getElementById('sendBtn').disabled = false;
+                cancelBtn.style.display = 'none';
                 return;
             }
 
@@ -802,6 +826,25 @@
 
             uploadedFilePaths = [];
             document.getElementById('uploadedFiles').innerHTML = '';
+        }
+
+        // ✅ 新增：取消任务函数
+        function cancelTask() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                alert('⚠️ 连接已断开');
+                return;
+            }
+
+            // ✅ 正确代码（恢复完整提示）
+            if (confirm('确定要中止当前任务吗？\n\n⚠️ 注意：正在执行的 API 调用会完成后才能中止。')) {
+                ws.send(JSON.stringify({ type: "cancel" }));
+
+                const cancelBtn = document.getElementById('cancelBtn');
+                cancelBtn.textContent = '⏳ 取消中...';
+                cancelBtn.disabled = true;
+
+                addMessage('assistant', '⏸️ 正在尝试取消任务，请稍候...');
+            }
         }
 
         // ==================== 添加思考日志 ====================

@@ -267,7 +267,7 @@ async def upload_file(file: UploadFile = File(...)):
 # ====================== WebSocket 端点（增强稳定性）======================
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket 端点（支持真实流式输出 + 心跳保活）"""
+    """WebSocket 端点（支持真实流式输出 + 心跳保活 + 取消功能）"""
     await websocket.accept()
     import time
     start_time = time.time()
@@ -288,9 +288,24 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
-            # 🔥🔥🔥 关键修复：忽略心跳 pong（只需加这 3 行）🔥🔥🔥
+            # ✅ 新增：处理取消请求
+            if data.get("type") == "cancel":
+                if swarm:
+                    swarm.cancel_current_task()
+                    await websocket.send_json({
+                        "type": "log",
+                        "content": "🛑 正在尝试取消任务..."
+                    })
+                    await websocket.send_json({
+                        "type": "stream",
+                        "agent": "System",
+                        "content": "\n\n⏸️ **正在取消任务，请稍候...**\n\n"
+                    })
+                continue
+
+            # 🔥 忽略心跳 pong
             if data.get("type") in ("pong", "ping"):
-                continue  # ← 跳过心跳，不当成用户消息
+                continue
 
             message = data.get("message", "").strip()
             if not message:
@@ -317,7 +332,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "session_id": session_id
             })
 
-            # 构建历史上下文（保持原有逻辑）
+            # 构建历史上下文
             history_context = ""
             history_lines = []
 
@@ -362,7 +377,7 @@ User: {message}"""
             else:
                 full_message = message
 
-            # 附件处理（保持原有逻辑）
+            # 附件处理
             if "📎 附件:" in message:
                 try:
                     file_paths = [
@@ -400,12 +415,10 @@ User: {message}"""
                                             f"页数: {result.get('pages', '未知')}\n"
                                             f"预览长度: {len(content)} 字符{'（已截断）' if truncated else ''}\n"
                                             f"内容:\n{content}"
-                                            + (
-                                                "\n\n💡 **提示**: 文件过长已截断，如需完整分析请明确要求使用 `summarize_long_file` 工具。" if truncated else "")
+                                            + ("\n\n💡 **提示**: 文件过长已截断，如需完整分析请明确要求使用 `summarize_long_file` 工具。" if truncated else "")
                                         )
                                     else:
-                                        file_contents.append(
-                                            f"### ❌ {Path(path).name} 解析失败: {result.get('error', '未知错误')}")
+                                        file_contents.append(f"### ❌ {Path(path).name} 解析失败: {result.get('error', '未知错误')}")
 
                                 elif path.endswith(('.txt', '.md')):
                                     result = swarm.tool_registry['read_file']['func'](file_path=path)
@@ -423,12 +436,10 @@ User: {message}"""
                                             f"大小: {result.get('length', 0)} 字符\n"
                                             f"预览长度: {len(content)} 字符{'（已截断）' if truncated else ''}\n"
                                             f"内容:\n{content}"
-                                            + (
-                                                "\n\n💡 **提示**: 文件过长已截断，如需完整分析请明确要求使用 `summarize_long_file` 工具。" if truncated else "")
+                                            + ("\n\n💡 **提示**: 文件过长已截断，如需完整分析请明确要求使用 `summarize_long_file` 工具。" if truncated else "")
                                         )
                                     else:
-                                        file_contents.append(
-                                            f"### ❌ {Path(path).name} 读取失败: {result.get('error', '未知错误')}")
+                                        file_contents.append(f"### ❌ {Path(path).name} 读取失败: {result.get('error', '未知错误')}")
 
                                 elif path.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
                                     file_contents.append(f"### 🖼️ {Path(path).name} (图片)\n路径: {path}")
@@ -463,7 +474,6 @@ User: {message}"""
                         data = await asyncio.wait_for(stream_queue.get(), timeout=0.1)
                         if data is None:
                             break
-                        # ✅ 检查连接状态
                         if websocket.client_state.name == "CONNECTED":
                             await websocket.send_json(data)
                     except asyncio.TimeoutError:
@@ -480,7 +490,6 @@ User: {message}"""
                         if log_msg is None:
                             break
                         simplified = log_msg[:60] + "..." if len(log_msg) > 60 else log_msg
-                        # ✅ 检查连接状态
                         if websocket.client_state.name == "CONNECTED":
                             await websocket.send_json({
                                 "type": "log",
@@ -542,7 +551,6 @@ User: {message}"""
                 await log_task
 
                 elapsed = time.time() - start_time
-                # ✅ 检查连接状态
                 if websocket.client_state.name == "CONNECTED":
                     await websocket.send_json({
                         "type": "log",
@@ -571,7 +579,6 @@ User: {message}"""
                 error_msg = f"❌ 执行失败: {str(e)[:200]}"
 
                 try:
-                    # ✅ 检查连接状态
                     if websocket.client_state.name == "CONNECTED":
                         await websocket.send_json({
                             "type": "error",
@@ -592,6 +599,9 @@ User: {message}"""
 
     except WebSocketDisconnect:
         print(f"🔌 WebSocket 断开连接")
+        # ✅ 连接断开时尝试取消任务
+        if swarm:
+            swarm.cancel_current_task()
     except Exception as e:
         print(f"💥 WebSocket 致命错误: {e}")
         import traceback

@@ -1073,8 +1073,27 @@ class MultiAgentSwarm:
         if not self.agents:
             raise ValueError("❌ 至少需要配置一个 Agent")
 
+        # ✨ 新增：取消标志（线程安全）
+        self._cancel_flag = threading.Event()
+        self._cancel_lock = threading.Lock()
+
         self.leader = self.agents[0]
         logging.info(f"👑 Leader: {self.leader.name}")
+
+    def cancel_current_task(self):
+        """取消当前正在执行的任务（线程安全）"""
+        with self._cancel_lock:
+            self._cancel_flag.set()
+            logging.info("🛑 收到取消请求")
+
+    def _reset_cancel_flag(self):
+        """重置取消标志（新任务开始时调用）"""
+        with self._cancel_lock:
+            self._cancel_flag.clear()
+
+    def _check_cancellation(self) -> bool:
+        """检查是否被取消"""
+        return self._cancel_flag.is_set()
 
     def _generate_detailed_plan(self, task: str, history: List[Dict]) -> str:
         """【最小改动核心】生成结构化Master Plan"""
@@ -1307,11 +1326,11 @@ class MultiAgentSwarm:
             memory_key: str = "default",
             image_paths: Optional[List[str]] = None,
             force_complexity: Optional[str] = None,
-            stream_callback=None,  # ✅ 新增：流式输出回调
-            log_callback=None  # ✅ 新增：日志回调
+            stream_callback=None,
+            log_callback=None
     ) -> str:
         """
-        解决任务的主入口（智能路由版 v3.1.0）
+        解决任务的主入口（智能路由版 v3.1.0 + 取消支持）
 
         Args:
             task: 任务描述
@@ -1325,40 +1344,45 @@ class MultiAgentSwarm:
         Returns:
             最终答案字符串
         """
+        # ✅ 任务开始时重置取消标志
+        self._reset_cancel_flag()
+
         tracker = TimeTracker()
         tracker.start()
         logging.info(f"\n{'=' * 80}")
         logging.info(f"📋 新任务: {task[:100]}{'...' if len(task) > 100 else ''}")
 
+        # ✅ 检查点 0：任务开始前
+        if self._check_cancellation():
+            return "⏸️ 任务已被用户取消"
+
         # 🔥【核心修复】仅 12 行，彻底解决历史污染
-        # 目的：分类器永远只看到“当前用户这一句意图”，历史只用于后续生成
         classification_task = task
         if isinstance(task, str) and "=== 💬 当前问题 ===" in task:
             try:
-                # 精准剥离 WebUI 前缀，只保留当前问题（最干净）
                 classification_task = task.split("=== 💬 当前问题 ===")[-1].strip()
                 if classification_task.startswith("User:") or classification_task.startswith("User："):
                     classification_task = classification_task.split(":", 1)[-1].strip()
-                # 安全截断（防止极端长查询）
                 classification_task = classification_task[:300]
-            except Exception:  # ← 加上 Exception
-                classification_task = task[:200]  # 兜底
+            except Exception:
+                classification_task = task[:200]
 
-        # logging.info(f"📊 分类使用纯查询: {classification_task[:80]}...")
         logging.info(f"📊 分类使用纯查询: {classification_task[:80]}{'...' if len(classification_task) > 80 else ''}")
 
-        # ===== 下面这行改成用 classification_task =====
         try:
+            # ✅ 检查点 1：分类前检查
+            if self._check_cancellation():
+                return "⏸️ 任务已被用户取消"
+
             if self.intelligent_routing_enabled:
                 complexity = (force_complexity or
                               self.force_complexity or
-                              self._classify_task_complexity(classification_task))  # ← 关键修改
+                              self._classify_task_complexity(classification_task))
             else:
                 complexity = "complex"
 
             tracker.checkpoint("1️⃣ 任务分类")
 
-            # ✅ 发送分类结果
             if log_callback:
                 log_callback(f"📊 任务复杂度: {complexity.upper()}")
 
@@ -1408,52 +1432,66 @@ class MultiAgentSwarm:
                 if log_callback:
                     log_callback("📚 已注入Primal相关记忆")
 
+        # ✅ 检查点 2：执行前检查
+        if self._check_cancellation():
+            return "⏸️ 任务已被用户取消"
+
         # ✨✨✨ 三级路由执行（带异常降级）✨✨✨
         final_answer = ""
-        execution_mode = complexity  # 记录实际执行模式
+        execution_mode = complexity
 
         try:
             if complexity == "simple":
                 final_answer = self._solve_simple(
                     task, history,
-                    stream_callback, log_callback  # ✅ 传递
+                    stream_callback, log_callback
                 )
 
             elif complexity == "medium":
                 final_answer = self._solve_medium(
                     task, history, tracker,
-                    stream_callback, log_callback  # ✅ 传递
+                    stream_callback, log_callback
                 )
 
             else:  # complex
                 final_answer = self._solve_complex(
                     task, history, tracker, use_memory, memory_key,
-                    stream_callback, log_callback  # ✅ 传递
+                    stream_callback, log_callback
                 )
 
         except Exception as e:
+            # ✅ 检查是否因取消而异常
+            if self._check_cancellation():
+                return "⏸️ 任务已被用户取消"
+
             logging.error(f"❌ {complexity.upper()} 模式执行失败: {e}")
             print(f"\n{'!' * 80}")
             print(f"⚠️  {complexity.upper()} 模式执行失败: {str(e)[:100]}")
             print(f"🔄 自动降级到 COMPLEX 完整模式...")
             print(f"{'!' * 80}\n")
 
-            # ✅ 发送降级日志
             if log_callback:
                 log_callback(f"⚠️ {complexity.upper()} 模式失败，降级到 COMPLEX")
 
-            # 降级到完整模式
             execution_mode = "complex (降级)"
             try:
                 final_answer = self._solve_complex(
                     task, history, tracker, use_memory, memory_key,
-                    stream_callback, log_callback  # ✅ 传递
+                    stream_callback, log_callback
                 )
             except Exception as fallback_error:
+                if self._check_cancellation():
+                    return "⏸️ 任务已被用户取消"
+
                 logging.error(f"❌ 降级执行也失败: {fallback_error}")
                 final_answer = f"[系统错误] 任务执行失败:\n原始错误: {str(e)}\n降级错误: {str(fallback_error)}"
                 if log_callback:
                     log_callback(f"❌ 系统错误: 任务执行失败")
+
+        # ✅ 检查点 3：执行后检查
+        if self._check_cancellation():
+            partial_result = final_answer[:500] + "..." if len(final_answer) > 500 else final_answer
+            return f"⏸️ 任务已被取消\n\n**部分结果**：\n{partial_result}" if final_answer else "⏸️ 任务已被用户取消"
 
         # ===== 统一输出（三种模式共用） =====
         print("\n" + "=" * 100)
@@ -1462,7 +1500,6 @@ class MultiAgentSwarm:
         print(final_answer)
         print("=" * 100)
 
-        # ✅ 发送完成日志
         if log_callback:
             log_callback(f"✅ 任务完成 (模式: {execution_mode.upper()})")
 
@@ -1489,23 +1526,29 @@ class MultiAgentSwarm:
             tracker: TimeTracker,
             use_memory: bool,
             memory_key: str,
-            stream_callback=None,  # ✅ 新增
-            log_callback=None  # ✅ 新增
+            stream_callback=None,
+            log_callback=None
     ) -> str:
         """
-        🔴 完整模式：全功能协作（原 solve() 的 complex 分支）
+        🔴 完整模式：全功能协作（新增取消检查）
         """
         logging.info("🔴 执行完整模式（全功能协作）")
         print(f"\n{'=' * 80}")
         print("🔴 检测到复杂任务，启用全功能协作模式")
         print(f"{'=' * 80}\n")
 
-        # ✅ 发送日志
         if log_callback:
             log_callback("🔴 执行完整模式（全功能协作）")
 
+        # ✅ 检查点：开始前
+        if self._check_cancellation():
+            return "⏸️ 任务在开始前被取消"
+
         # ===== 任务分解 =====
         if self.enable_task_decomposition and self.mode == "intelligent":
+            if self._check_cancellation():
+                return "⏸️ 任务在分解前被取消"
+
             decomposition = self._decompose_task(task)
             if decomposition:
                 history.insert(0, {"speaker": "System", "content": decomposition})
@@ -1513,7 +1556,11 @@ class MultiAgentSwarm:
                 if log_callback:
                     log_callback("📋 任务分解完成")
 
-        # 🔥【新增】显式Master Plan（最小改动核心）
+        # ✅ 检查点：Master Plan 生成前
+        if self._check_cancellation():
+            return "⏸️ 任务在规划前被取消"
+
+        # 🔥【新增】显式Master Plan
         plan = self._generate_detailed_plan(task, history)
         if plan:
             history.insert(0, {"speaker": "System", "content": plan})
@@ -1534,11 +1581,22 @@ class MultiAgentSwarm:
             if log_callback:
                 log_callback(f"📚 加载历史记忆: {memory_key}")
 
+        # ✅ 检查点：主循环前
+        if self._check_cancellation():
+            return "⏸️ 任务在讨论开始前被取消"
+
         # ===== 主循环（多轮讨论 + 辩论）=====
         round_num = 0
         previous_quality = 0
 
         while True:
+            # ✅ 关键检查点：每轮开始前
+            if self._check_cancellation():
+                logging.info(f"🛑 第 {round_num} 轮被取消")
+                if log_callback:
+                    log_callback(f"⏸️ 第 {round_num} 轮被取消")
+                break
+
             round_num += 1
             if round_num > self.max_rounds:
                 logging.info(f"⏸️  达到最大轮次 {self.max_rounds}，停止讨论")
@@ -1550,7 +1608,6 @@ class MultiAgentSwarm:
             logging.info(f"🔄 第 {round_num} 轮讨论开始")
             logging.info(f"{'─' * 80}")
 
-            # ✅ 发送轮次日志
             if log_callback:
                 log_callback(f"🔄 第 {round_num}/{self.max_rounds} 轮讨论开始")
 
@@ -1564,12 +1621,20 @@ class MultiAgentSwarm:
                         history.copy(),
                         round_num,
                         critique_previous=(round_num > 1 and self.enable_adversarial_debate),
-                        log_callback=log_callback  # ✅ 仅传递日志（避免流式混乱）
+                        log_callback=log_callback
                     ): agent
                     for agent in self.agents
                 }
 
                 for future in as_completed(future_to_agent):
+                    # ✅ 检查点：每个 Agent 完成后
+                    if self._check_cancellation():
+                        logging.info(f"🛑 Agent 讨论被取消，正在清理...")
+                        # 取消未完成的任务
+                        for f in future_to_agent:
+                            f.cancel()
+                        break
+
                     agent = future_to_agent[future]
                     try:
                         contribution = future.result()
@@ -1591,21 +1656,42 @@ class MultiAgentSwarm:
                         if log_callback:
                             log_callback(f"❌ {agent.name} 执行失败")
 
+            # ✅ 检查点：本轮讨论后
+            if self._check_cancellation():
+                logging.info(f"🛑 第 {round_num} 轮讨论后被取消")
+                if log_callback:
+                    log_callback(f"⏸️ 第 {round_num} 轮讨论被取消")
+                break
+
             round_elapsed = time.time() - round_start
             tracker.checkpoint(f"3️⃣ 第{round_num}轮讨论 ({round_elapsed:.1f}秒)")
-            # ✨ 新增：每轮自动压缩历史（防64K爆表）
+
+            # ✨ 自动压缩历史
             history = self._compress_history(history)
             tracker.checkpoint(f"3.5️⃣ 历史压缩")
 
             # ===== 对抗式辩论与自适应反思 =====
             if self.mode == "intelligent" and self.reflection_planning:
+                # ✅ 检查点：辩论前
+                if self._check_cancellation():
+                    logging.info(f"🛑 辩论前被取消")
+                    if log_callback:
+                        log_callback(f"⏸️ 辩论被取消")
+                    break
+
                 if log_callback:
                     log_callback(f"🥊 启动对抗式辩论 (第 {round_num} 轮)")
 
                 quality_score, decision = self._adversarial_debate(history, round_num)
                 tracker.checkpoint(f"4️⃣ 第{round_num}轮辩论")
 
-                # ✅ 发送辩论结果
+                # ✅ 检查点：辩论后
+                if self._check_cancellation():
+                    logging.info(f"🛑 辩论后被取消")
+                    if log_callback:
+                        log_callback(f"⏸️ 辩论被取消")
+                    break
+
                 if log_callback:
                     log_callback(f"📊 辩论结果: 质量 {quality_score}/100, 决策 {decision}")
 
@@ -1643,6 +1729,21 @@ class MultiAgentSwarm:
                             log_callback("✅ 裁判建议停止")
                         break
 
+        # ✅ 最终检查：综合前
+        if self._check_cancellation():
+            # 返回部分结果
+            if history and len(history) > 0:
+                last_content = ""
+                for h in reversed(history):
+                    if h.get("speaker") not in ["System", "User"]:
+                        last_content = h.get("content", "")
+                        break
+
+                partial = last_content[:800] + "..." if len(last_content) > 800 else last_content
+                return f"⏸️ 任务已被取消\n\n**部分结果**（来自第 {round_num} 轮讨论）：\n\n{partial}"
+            else:
+                return "⏸️ 任务已被取消，暂无结果"
+
         # ===== 最终综合 =====
         if log_callback:
             log_callback("🎯 开始最终综合")
@@ -1661,15 +1762,24 @@ class MultiAgentSwarm:
             )
         })
 
+        # ✅ 检查点：最终生成前
+        if self._check_cancellation():
+            return "⏸️ 任务在最终综合前被取消"
+
         final_answer = self.leader.generate_response(
             history,
             round_num + 1,
             force_non_stream=False,
-            stream_callback=stream_callback,  # ✅ 传递流式
-            log_callback=log_callback  # ✅ 传递日志
+            stream_callback=stream_callback,
+            log_callback=log_callback
         )
 
         tracker.checkpoint("5️⃣ 最终综合")
+
+        # ✅ 检查点：最终生成后
+        if self._check_cancellation():
+            partial = final_answer[:800] + "..." if len(final_answer) > 800 else final_answer
+            return f"⏸️ 任务已被取消\n\n**部分结果**：\n\n{partial}" if final_answer else "⏸️ 任务已被取消"
 
         # ===== 保存记忆 =====
         if use_memory:
@@ -1690,7 +1800,7 @@ class MultiAgentSwarm:
                 # ✨ PrimalClaw：保存结构化记忆 + 自动提炼
                 if hasattr(self, 'primal_memory'):
                     self.primal_memory.save_episode(task, history, final_answer, memory_key)
-                    self.primal_memory.decay()  # 轻量衰退
+                    self.primal_memory.decay()
 
                 # 向量记忆
                 if self.vector_memory:
