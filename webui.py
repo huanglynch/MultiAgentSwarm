@@ -269,7 +269,6 @@ async def upload_file(file: UploadFile = File(...)):
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket 端点（支持真实流式输出 + 心跳保活）"""
     await websocket.accept()
-
     import time
     start_time = time.time()
 
@@ -288,8 +287,12 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_json()
-            message = data.get("message", "").strip()
 
+            # 🔥🔥🔥 关键修复：忽略心跳 pong（只需加这 3 行）🔥🔥🔥
+            if data.get("type") in ("pong", "ping"):
+                continue  # ← 跳过心跳，不当成用户消息
+
+            message = data.get("message", "").strip()
             if not message:
                 await websocket.send_json({
                     "type": "error",
