@@ -691,9 +691,17 @@ class Agent:
             )
             system_extra = critique_prompt + "\n\n" + system_extra
 
-        # 构建系统提示词
+        # 在 system_prompt = f"{self.role}\n..." 之前加：
+        # 🔥【Plan 注入】每个 Agent 都知道当前 Master Plan（最小改动）
+        plan_summary = next(
+            (h["content"] for h in history if "Master Plan" in str(h.get("content", ""))),
+            ""
+        )[:300]
+
+        # 构建系统提示词（Plan 摘要放在最前面，让所有 Agent 对齐）
         system_prompt = (
             f"{self.role}\n"
+            f"【当前Master Plan摘要】\n{plan_summary}\n\n"  # ← 直接内嵌
             f"{self.shared_knowledge}\n"
             f"{system_extra}\n"
             "你是多智能体协作团队的一员，请提供有价值、准确、有深度的贡献。"
@@ -1067,6 +1075,29 @@ class MultiAgentSwarm:
 
         self.leader = self.agents[0]
         logging.info(f"👑 Leader: {self.leader.name}")
+
+    def _generate_detailed_plan(self, task: str, history: List[Dict]) -> str:
+        """【最小改动核心】生成结构化Master Plan"""
+        plan_prompt = (
+            f"任务：{task}\n\n"  # ← 保持原样
+            "请立即制定一个**清晰、可执行、阶段性**的Master Plan（用中文编号列表）：\n"
+            "1. 任务分解为3-5个主要阶段（Phase）\n"
+            "2. 每个阶段：目标 + 主要负责Agent + 预期输出\n"
+            "3. 关键检查点（quality gate）和成功指标\n"
+            "4. 潜在风险及应对（Benjamin特别关注逻辑漏洞）\n"
+            f"5. 总轮次控制建议（不超过{self.max_rounds}轮）\n\n"  # ← 只改这一行，加 f 和 self.
+            "要求：极简清晰、可直接作为System Prompt使用。不要多余废话。"
+        )
+        try:
+            plan_response = self.leader.generate_response(
+                [{"speaker": "System", "content": plan_prompt}],
+                0,
+                force_non_stream=True
+            )
+            return f"📋 【Master Plan】\n{plan_response}"
+        except Exception as e:
+            logging.warning(f"Plan生成失败: {e}")
+            return ""
 
     def _print_startup_banner(self):
         """打印启动横幅"""
@@ -1481,6 +1512,14 @@ class MultiAgentSwarm:
                 tracker.checkpoint("2️⃣ 任务分解")
                 if log_callback:
                     log_callback("📋 任务分解完成")
+
+        # 🔥【新增】显式Master Plan（最小改动核心）
+        plan = self._generate_detailed_plan(task, history)
+        if plan:
+            history.insert(0, {"speaker": "System", "content": plan})
+            if log_callback:
+                log_callback("📋 Master Plan 已生成并注入")
+            tracker.checkpoint("2.5️⃣ Master Plan 生成")
 
         # ===== 加载历史记忆 =====
         if use_memory and memory_key in self.memory:
