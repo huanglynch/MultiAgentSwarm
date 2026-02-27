@@ -73,6 +73,12 @@ shared_knowledge: |
   2. 如果用户查询涉及个人信息或敏感内容，必须**立即礼貌拒绝**，并回复类似：“为了保护用户隐私，我无法提供或讨论任何个人信息或敏感内容。”
   3. 所有输出必须经过隐私审查：**绝不输出**任何可能识别个人身份或泄露机密的信息。
   4. 此规则优先级高于所有其他规则，任何冲突时以此为准。
+  
+  【工具调用铁律 - 必须无条件严格遵守】
+  - 只有 Grok（团队领导者）负责主动调用 list_dir / get_project_structure 进行文件系统探索。
+  - 其他 Agent 除非任务明确要求「请检查当前目录/文件列表」，否则**绝对不要调用任何目录浏览工具**。
+  - 需要文件上下文时，直接说「请 Grok 提供相关文件摘要」即可。
+  - 优先使用 get_project_structure（已按铁律要求实现），而非 list_dir。
 
   【文件探索铁律 - 必须严格遵守】
   1. 任何时候想查看项目结构、文件、报告，必须**第一步先调用 get_project_structure()**。
@@ -93,7 +99,7 @@ shared_knowledge: |
 agents:
   - name: Grok
     role: "你是团队领导者，风格幽默实用，负责协调与最终高质量输出。"
-    api_key: ""
+    api_key: "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"
     base_url: "https://integrate.api.nvidia.com/v1"
     model: "openai/gpt-oss-120b"
     temperature: 0.75
@@ -103,30 +109,30 @@ agents:
 
   - name: Harper
     role: "你是创意研究员，专注新颖想法和跨领域洞见。擅长发现潜在机会。"
-    api_key: ""
+    api_key: "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"
     base_url: "https://integrate.api.nvidia.com/v1"
     model: "openai/gpt-oss-120b"
     temperature: 0.9
     stream: true
     max_tokens: 4096
-    enabled_tools: ["read_file", "write_file", "list_dir", "web_search", "browse_page", "get_project_structure", "search_files", "code_executor", "pdf_reader", "summarize_long_file"]
+    enabled_tools: ["read_file", "write_file", "web_search", "browse_page", "get_project_structure", "search_files", "code_executor", "pdf_reader", "summarize_long_file"]
 
   - name: Benjamin
     role: "你是严谨逻辑分析师，专注事实检查和严密推理。擅长找出逻辑漏洞和风险。"
-    api_key: ""
+    api_key: "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"
     base_url: "https://integrate.api.nvidia.com/v1"
     model: "openai/gpt-oss-120b"
     temperature: 0.5
     stream: false
     max_tokens: 4096
-    enabled_tools: ["list_dir", "web_search"]
+    enabled_tools: ["web_search"]
 
   - name: Lucas
     role: "你是执行与总结专家，擅长把观点整合成可落地方案。"
-    api_key: ""
+    api_key: "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"
     base_url: "https://integrate.api.nvidia.com/v1"
     model: "openai/gpt-oss-120b"
     temperature: 0.65
     stream: true
     max_tokens: 4096
-    enabled_tools: ["write_file", "web_search", "browse_page"]
+    enabled_tools: ["write_file", "web_search", "browse_page", "get_project_structure"]
