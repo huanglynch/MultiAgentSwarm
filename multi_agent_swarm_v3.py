@@ -660,7 +660,7 @@ class Agent:
             log_callback=None
     ) -> str:
         """
-        生成 Agent 响应
+        生成 Agent 响应（增强版：工具调用超限兜底）
 
         Args:
             history: 对话历史
@@ -713,7 +713,7 @@ class Agent:
                     "content": f"[{h['speaker']}] {h.get('content', '')}"
                 })
 
-        est_tokens = sum(len(str(m.get("content", ""))) // 2 for m in messages)  # 粗估
+        est_tokens = sum(len(str(m.get("content", ""))) // 2 for m in messages)
         if est_tokens > 110000 and "128" in str(self.context_limit_k):
             logging.warning(f"⚠️ 上下文接近128K上限！当前估算 {est_tokens} tokens")
         start_time = time.time()
@@ -764,16 +764,16 @@ class Agent:
                     for i in range(0, len(full_response), chunk_size):
                         chunk = full_response[i:i + chunk_size]
                         stream_callback(self.name, chunk)
-                        time.sleep(0.02)  # 可选：模拟打字延迟
+                        time.sleep(0.02)
 
-            # ===== 🔧 工具调用处理（支持多轮循环）=====
+            # ===== 🔧 工具调用处理（支持多轮循环 + 超限兜底）=====
             if (not use_stream and
                     hasattr(response.choices[0].message, 'tool_calls') and
                     response.choices[0].message.tool_calls):
 
-                # max_tool_iterations = 5
                 max_tool_iterations = 10
                 iteration = 0
+                tool_call_history = []  # 🔥 记录所有工具调用
 
                 while (hasattr(response.choices[0].message, 'tool_calls') and
                        response.choices[0].message.tool_calls and
@@ -793,6 +793,9 @@ class Agent:
                         tool_result = self._execute_tool(tool_call)
                         messages.append(tool_result)
 
+                        # 🔥 记录工具调用
+                        tool_call_history.append(tool_result['name'])
+
                         # 显示工具调用结果（截断预览）
                         result_preview = tool_result.get("content", "")[:150]
                         if len(tool_result.get("content", "")) > 150:
@@ -810,39 +813,52 @@ class Agent:
                         max_tokens=self.max_tokens,
                         tools=self.tools if self.tools else None,
                         tool_choice="auto" if self.tools else None,
-                        stream=False  # 工具调用后暂时用非流式
+                        stream=False
                     )
 
-                    # ✅ 关键修复：如果不再调用工具，提取最终答案并发送给前端
+                    # ✅ 如果不再调用工具，提取最终答案并发送给前端
                     if not (hasattr(response.choices[0].message, 'tool_calls') and
                             response.choices[0].message.tool_calls):
                         full_response = response.choices[0].message.content or ""
 
-                        # ✅ 模拟流式发送（分块发送给前端）
+                        # ✅ 模拟流式发送
                         if stream_callback and full_response:
-                            chunk_size = 20  # 每块 20 个字符（可调整）
+                            chunk_size = 20
                             for i in range(0, len(full_response), chunk_size):
                                 chunk = full_response[i:i + chunk_size]
                                 stream_callback(self.name, chunk)
-                                time.sleep(0.02)  # 模拟打字效果
+                                time.sleep(0.02)
 
                         print(f"   💬 [{self.name}] 工具调用完成，生成最终答案")
                         if log_callback:
                             log_callback(f"[{self.name}] 工具调用完成")
                         break
 
-                # ✅ 工具调用超限处理
+                # 🔥🔥🔥 核心修复：工具调用超限后的兜底逻辑 🔥🔥🔥
                 if iteration >= max_tool_iterations:
                     print(f"   ⚠️ [{self.name}] 工具调用达到上限 ({max_tool_iterations} 轮)")
-                    full_response = response.choices[0].message.content or "[工具调用超限，请简化任务]"
 
-                    # ✅ 超限时也发送给前端
+                    # 🔥 检查是否有有效回复
+                    if not full_response or not full_response.strip():
+                        # 生成友好兜底消息
+                        unique_tools = list(set(tool_call_history))
+                        full_response = (
+                            f"⚠️ 工具调用达到上限（{max_tool_iterations}次），已收集部分信息。\n\n"
+                            f"**已调用工具**: {', '.join(unique_tools)}\n\n"
+                            "**建议操作**：\n"
+                            "1. 尝试简化问题或分步提问\n"
+                            "2. 检查附件大小（建议<5MB）\n"
+                            "3. 如需完整分析，请明确指定分析范围\n\n"
+                            "💡 **提示**: 当前任务可能过于复杂，建议将其拆分为多个小任务分别处理。"
+                        )
+
+                        print(f"   ⚠️ 未生成有效回复，已使用兜底消息")
+                        if log_callback:
+                            log_callback(f"[{self.name}] ⚠️ 工具超限，使用兜底回复")
+
+                    # ✅ 新增：兜底消息一次性发送（避免空白分块）
                     if stream_callback and full_response:
-                        chunk_size = 20
-                        for i in range(0, len(full_response), chunk_size):
-                            chunk = full_response[i:i + chunk_size]
-                            stream_callback(self.name, chunk)
-                            time.sleep(0.02)
+                        stream_callback(self.name, full_response)  # ← 一次性发送完整消息
 
                     if log_callback:
                         log_callback(f"[{self.name}] 工具调用超限")
@@ -859,6 +875,21 @@ class Agent:
 
             logging.info(f"⏱️  {self.name} 响应耗时: {elapsed_str}")
 
+            # 🔥 最终兜底检查（防止所有情况漏网）
+            if not full_response or not full_response.strip():
+                full_response = (
+                    f"⚠️ [{self.name}] 未能生成有效回复。\n\n"
+                    "可能原因：\n"
+                    "- 工具调用超限或失败\n"
+                    "- 网络异常或模型超时\n"
+                    "- 输入内容无法处理\n\n"
+                    "**建议操作**：\n"
+                    "1. 检查输入内容是否完整\n"
+                    "2. 简化问题后重试\n"
+                    "3. 联系技术支持"
+                )
+                logging.warning(f"⚠️ {self.name} 未生成有效回复，使用兜底消息")
+
             return full_response.strip()
 
         except Exception as e:
@@ -870,7 +901,15 @@ class Agent:
             if log_callback:
                 log_callback(f"[{self.name}] ❌ 执行失败: {str(e)[:50]}")
 
-            return err
+            # 🔥 异常情况也返回友好消息
+            return (
+                f"❌ [{self.name}] 执行失败\n\n"
+                f"**错误信息**: {str(e)[:200]}\n\n"
+                "**建议操作**：\n"
+                "1. 检查网络连接\n"
+                "2. 确认 API 配置正确\n"
+                "3. 稍后重试或联系管理员"
+            )
 
 
 # ====================== 主类 MultiAgentSwarm ======================
