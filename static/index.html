@@ -748,7 +748,11 @@
             const input = document.getElementById('messageInput');
             const message = input.value.trim();
 
-            if (!message && uploadedFilePaths.length === 0) return;
+            // ✅ 严格拦截空消息（无提示，直接返回）
+            if (!message && uploadedFilePaths.length === 0) {
+                return;
+            }
+
             if (isProcessing) return;
 
             isProcessing = true;
@@ -756,9 +760,15 @@
 
             let fullMessage = message.trim();
 
-            // 关键修复：只上传附件时自动补充清晰问题（防止空消息 + 引导Agent直接总结）
             if (!fullMessage && uploadedFilePaths.length > 0) {
                 fullMessage = "请仔细分析这个PDF附件的主要内容，给出结构化总结、关键点提取和专业建议。";
+            }
+
+            // 二次校验
+            if (!fullMessage && uploadedFilePaths.length === 0) {
+                isProcessing = false;
+                document.getElementById('sendBtn').disabled = false;
+                return;
             }
 
             if (uploadedFilePaths.length > 0) {
