@@ -1,6 +1,7 @@
 openai:
   default_model: "gpt-4o-mini"
   default_max_tokens: 4096
+  context_limit_k: "64"
 
 swarm:
   mode: "intelligent"                    # 运行模式: "fixed" 或 "intelligent"
