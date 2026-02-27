@@ -13,8 +13,6 @@
 
 import yaml
 import logging
-import os
-import glob
 import importlib.util
 import requests
 import random
@@ -27,11 +25,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Optional, Tuple
 from openai import OpenAI
 import json
-from datetime import datetime
 import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from duckduckgo_search import DDGS
+import os
+from datetime import datetime, timedelta
+from pathlib import Path
+import glob
 
 # ====================== 时间统计工具 ======================
 from contextlib import contextmanager
@@ -362,6 +363,83 @@ class VectorMemory:
         return ""
 
 
+class PrimalMemory:
+    """PrimalClaw极简版：树状日志 + 原子KB + 衰退 + 完整QMD检索（已优化）"""
+    def __init__(self, base_dir: str = "./memory", vector_memory=None):  # ← 改这里
+        self.base_dir = Path(base_dir)
+        self.logs_dir = self.base_dir / "logs"
+        self.kb_dir = self.base_dir / "kb"
+        self.archive_dir = self.base_dir / "archive"
+        for d in [self.logs_dir, self.kb_dir / "lessons", self.kb_dir / "decisions", self.archive_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+
+        self.vector_memory = vector_memory   # ← 新增这一行
+
+    def save_episode(self, task: str, history: list, final_answer: str, memory_key: str):
+        """写入Layer2树状日志 + 原子KB（不覆盖）"""
+        today = datetime.now().strftime("%Y-%m-%d")
+        timestamp = datetime.now().strftime('%H%M%S')
+        log_path = self.logs_dir / today / f"{memory_key}_{timestamp}.md"
+        log_path.parent.mkdir(exist_ok=True)
+
+        content = f"# Episode: {memory_key}\n**时间**: {datetime.now()}\n**任务**: {task[:200]}\n\n"
+        content += "## 讨论历史\n" + "\n".join([f"- **{h.get('speaker','')}:** {h.get('content','')[:300]}..." for h in history[-5:]])
+        content += f"\n\n## 最终答案\n{final_answer[:2000]}\n"
+
+        log_path.write_text(content, encoding="utf-8")
+
+        # 原子KB（不覆盖，用时间戳）
+        kb_path = self.kb_dir / "lessons" / f"{memory_key}_{timestamp}.md"
+        kb_text = f"## lesson-{memory_key}-{timestamp}\n"
+        kb_text += f"**Title**: 从 {memory_key} 提炼的关键经验\n"
+        kb_text += f"**Content**: {final_answer[:800].replace('**','')}\n"
+        kb_text += f"**Source**: {log_path.relative_to(self.base_dir)}\n"
+        kb_text += f"**Importance**: 0.85\n**LastAccess**: {datetime.now().isoformat()}\n"
+        kb_path.write_text(kb_text, encoding="utf-8")
+
+    def get_relevant_memory(self, query: str, n: int = 3) -> str:
+        """完整QMD混合检索：Vector语义优先 + 文件关键词"""
+        results = []
+
+        # 1. 优先用已有VectorMemory（语义强）
+        if hasattr(self, 'vector_memory') and self.vector_memory:  # 注意：需在MultiAgentSwarm中传引用
+            vec_result = self.vector_memory.search(query, n_results=n)
+            if vec_result:
+                results.append(f"🔍 Vector语义记忆:\n{vec_result}")
+
+        # 2. 文件精确匹配（fallback）
+        for f in glob.glob(str(self.kb_dir / "**/*.md"), recursive=True)[:n]:
+            try:
+                text = Path(f).read_text(encoding="utf-8")[:600]
+                if any(k in text.lower() for k in query.lower().split()[:4]):
+                    results.append(f"📁 {Path(f).name}:\n{text}")
+            except:
+                pass
+
+        # return "\n\n---\n\n".join(results[:n]) if results else ""
+        result = "\n\n---\n\n".join(results[:n]) if results else ""
+        # return result[:12000]  # ← 新增：单次注入最多12K字符（≈6K tokens）
+        return result[:12000]  # ← 新增：单次注入最多12K字符（≈6K tokens）
+
+    def decay(self):
+        """指数衰退 + GC（更安全）"""
+        threshold = 0.4
+        for md_file in glob.glob(str(self.kb_dir / "**/*.md"), recursive=True):
+            try:
+                text = Path(md_file).read_text(encoding="utf-8")
+                if "Importance:" in text and "LastAccess:" in text:
+                    imp_line = text.split("Importance:")[1].split("\n")[0].strip()
+                    last_line = text.split("LastAccess:")[1].split("\n")[0].strip()
+                    imp = float(imp_line)
+                    last = datetime.fromisoformat(last_line)
+                    days = (datetime.now() - last).days
+                    new_imp = imp * (0.985 ** max(days, 0))
+                    if new_imp < threshold:
+                        archive_path = self.archive_dir / Path(md_file).name
+                        Path(md_file).rename(archive_path)
+            except:
+                pass
+
 # ====================== ✨ 知识图谱管理器 ======================
 class KnowledgeGraph:
     """
@@ -510,13 +588,15 @@ class Agent:
             tool_registry: Dict,
             shared_knowledge: str = "",
             vector_memory: Optional[VectorMemory] = None,
-            knowledge_graph: Optional[KnowledgeGraph] = None
+            knowledge_graph: Optional[KnowledgeGraph] = None,
+            context_limit_k: str = "64"  # ← 新增这一行
     ):
         self.name = config["name"]
         self.role = config["role"]
         self.shared_knowledge = shared_knowledge
         self.vector_memory = vector_memory
         self.knowledge_graph = knowledge_graph
+        self.context_limit_k = context_limit_k  # ← 新增这一行，保存下来
 
         # OpenAI 客户端配置
         self.client = OpenAI(
@@ -594,8 +674,6 @@ class Agent:
         Returns:
             str: Agent 的完整响应
         """
-        start_time = time.time()
-
         # ✅ 判断是否使用流式输出（如果有 stream_callback，强制启用）
         use_stream = (
                 (self.stream or stream_callback is not None) and
@@ -634,6 +712,11 @@ class Agent:
                     "role": "assistant",
                     "content": f"[{h['speaker']}] {h.get('content', '')}"
                 })
+
+        est_tokens = sum(len(str(m.get("content", ""))) // 2 for m in messages)  # 粗估
+        if est_tokens > 110000 and "128" in str(self.context_limit_k):
+            logging.warning(f"⚠️ 上下文接近128K上限！当前估算 {est_tokens} tokens")
+        start_time = time.time()
 
         try:
             # ✅ 添加开始日志
@@ -805,11 +888,14 @@ class MultiAgentSwarm:
         oai = cfg.get("openai", {})
         self.default_model = oai.get("default_model", "gpt-4o-mini")
         self.default_max_tokens = oai.get("default_max_tokens", 4096)
+        self.context_limit_k = oai.get("context_limit_k", "64")
 
         # Swarm 配置
         swarm = cfg.get("swarm", {})
         self.mode = swarm.get("mode", "fixed")
-        self.max_rounds = swarm.get("max_rounds", 3 if self.mode == "fixed" else 10)
+        # self.max_rounds = swarm.get("max_rounds", 3 if self.mode == "fixed" else 10)
+        # 根据上下文限制动态轮次（64K时保守，128K时激进）
+        self.max_rounds = 8 if "64" in str(self.context_limit_k) else 12  # 或者读配置
         self.max_concurrent_agents = swarm.get("max_concurrent_agents", 2)
         self.reflection_planning = swarm.get("reflection_planning", True)
         self.enable_web_search = swarm.get("enable_web_search", False)
@@ -908,6 +994,13 @@ class MultiAgentSwarm:
                 logging.warning(f"⚠️ 向量记忆初始化失败: {e}")
                 self.vector_memory_enabled = False
 
+        # ✨ PrimalClaw极简记忆系统（最小改动核心）
+        self.primal_memory = PrimalMemory(
+            base_dir="./memory",
+            vector_memory=self.vector_memory  # ← 直接传入，更优雅
+        )
+        logging.info("✅ PrimalMemory (树状日志+原子KB+衰退) 初始化成功")
+
         # ✨ 初始化知识图谱
         self.knowledge_graph = None
         if self.enable_knowledge_graph:
@@ -924,7 +1017,8 @@ class MultiAgentSwarm:
                 self.tool_registry,
                 self.shared_knowledge,
                 self.vector_memory,
-                self.knowledge_graph
+                self.knowledge_graph,
+                context_limit_k=self.context_limit_k
             )
             self.agents.append(agent)
             logging.info(f"✅ Agent 加载: {agent.name} | Model: {agent.model}")
@@ -1236,6 +1330,14 @@ class MultiAgentSwarm:
         else:
             history.append({"speaker": "User", "content": task})
 
+        # ✨ PrimalClaw：注入相关历史记忆（QMD检索）
+        if use_memory and hasattr(self, 'primal_memory'):
+            relevant = self.primal_memory.get_relevant_memory(task)
+            if relevant:
+                history.insert(0, {"speaker": "System", "content": f"📚 Primal记忆（相关经验）：\n{relevant}"})
+                if log_callback:
+                    log_callback("📚 已注入Primal相关记忆")
+
         # ✨✨✨ 三级路由执行（带异常降级）✨✨✨
         final_answer = ""
         execution_mode = complexity  # 记录实际执行模式
@@ -1413,6 +1515,9 @@ class MultiAgentSwarm:
 
             round_elapsed = time.time() - round_start
             tracker.checkpoint(f"3️⃣ 第{round_num}轮讨论 ({round_elapsed:.1f}秒)")
+            # ✨ 新增：每轮自动压缩历史（防64K爆表）
+            history = self._compress_history(history)
+            tracker.checkpoint(f"3.5️⃣ 历史压缩")
 
             # ===== 对抗式辩论与自适应反思 =====
             if self.mode == "intelligent" and self.reflection_planning:
@@ -1503,6 +1608,11 @@ class MultiAgentSwarm:
                     force_non_stream=True
                 )
                 self._save_memory(memory_key, summary)
+
+                # ✨ PrimalClaw：保存结构化记忆 + 自动提炼
+                if hasattr(self, 'primal_memory'):
+                    self.primal_memory.save_episode(task, history, final_answer, memory_key)
+                    self.primal_memory.decay()  # 轻量衰退
 
                 # 向量记忆
                 if self.vector_memory:
@@ -1711,6 +1821,39 @@ class MultiAgentSwarm:
         tracker.checkpoint("3️⃣ 快速综合")
 
         return final_answer
+
+    def _compress_history(self, history: List[Dict], max_tokens_approx: int = 20000) -> List[Dict]:
+        """极简滚动压缩：只保留最近N轮 + Primal摘要"""
+        if len(history) < 8:  # 短历史不压缩
+            return history
+
+        # 估算tokens（粗略：中文≈2char=1token）
+        total_chars = sum(len(str(h.get("content", ""))) for h in history)
+        if total_chars < max_tokens_approx * 2:
+            return history
+
+        # 保留：系统提示 + 最近3轮 + Primal记忆 + 最终答案
+        compressed = [h for h in history if h["speaker"] == "System" and "Primal记忆" in str(h.get("content", ""))]
+        compressed.extend(history[-6:])  # 保留最近3轮讨论（每轮2条左右）
+
+        # 如果还是太长，让Leader做一次超短总结
+        if len(str(compressed)) > max_tokens_approx * 3:
+            summary_prompt = "请用800字以内总结以上全部历史，只保留关键决策、教训和结论，不要重复细节。"
+            short_summary = self.leader.generate_response(
+                [{"speaker": "System", "content": summary_prompt}] + compressed[-4:],
+                0, force_non_stream=True
+            )
+            compressed = [{"speaker": "System", "content": f"📜 历史压缩总结：\n{short_summary}"}]
+
+        return compressed
+
+    def nightly_reflect(self):
+        """夜间/任务后反思（可手动或定时调用）"""
+        if not hasattr(self, 'primal_memory'):
+            return
+        # 让Leader做一次全局反思（复用现有generate_response）
+        prompt = "请扫描/memory/kb/所有lessons，提炼≤5条跨任务通用智慧，更新到kb/decisions/general.md"
+        self.leader.generate_response([{"speaker": "System", "content": prompt}], 0, force_non_stream=True)
 
 
 # ====================== 主函数 ======================
