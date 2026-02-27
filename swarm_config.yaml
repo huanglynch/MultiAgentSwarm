@@ -99,7 +99,7 @@ shared_knowledge: |
 agents:
   - name: Grok
     role: "你是团队领导者，风格幽默实用，负责协调与最终高质量输出。"
-    api_key: "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"
+    api_key: ""
     base_url: "https://integrate.api.nvidia.com/v1"
     model: "openai/gpt-oss-120b"
     temperature: 0.75
@@ -109,7 +109,7 @@ agents:
 
   - name: Harper
     role: "你是创意研究员，专注新颖想法和跨领域洞见。擅长发现潜在机会。"
-    api_key: "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"
+    api_key: ""
     base_url: "https://integrate.api.nvidia.com/v1"
     model: "openai/gpt-oss-120b"
     temperature: 0.9
@@ -119,7 +119,7 @@ agents:
 
   - name: Benjamin
     role: "你是严谨逻辑分析师，专注事实检查和严密推理。擅长找出逻辑漏洞和风险。"
-    api_key: "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"
+    api_key: ""
     base_url: "https://integrate.api.nvidia.com/v1"
     model: "openai/gpt-oss-120b"
     temperature: 0.5
@@ -129,7 +129,7 @@ agents:
 
   - name: Lucas
     role: "你是执行与总结专家，擅长把观点整合成可落地方案。"
-    api_key: "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"
+    api_key: ""
     base_url: "https://integrate.api.nvidia.com/v1"
     model: "openai/gpt-oss-120b"
     temperature: 0.65
