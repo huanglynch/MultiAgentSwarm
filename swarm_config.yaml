@@ -32,12 +32,14 @@ swarm:
 # ============================================================
 # ✨ 高级增强功能配置
 # ============================================================
-
 advanced_features:
   # 对抗式辩论（Pro vs Con vs Judge）
   adversarial_debate:
     enabled: true                        # ✅ 默认启用
     description: "多角色对抗式辩论机制"
+    trigger_strategy: "quality_based"   # 新增这一行，可选值: always / quality_based / every_n_rounds
+    trigger_threshold: 82               # 质量低于这个值才触发辩论（默认 82）
+    trigger_interval: 2                 # every_n_rounds 模式下每隔几轮触发一次
 
   # Meta-Critic（元批评者）
   meta_critic:
@@ -84,7 +86,7 @@ shared_knowledge: |
      - Harper、Benjamin、Lucas **永远不得**主动发起任何文件读取或目录浏览操作。
   4. **违令处理**：任何试图读取非 uploads/ 文件的行为视为**严重安全违规**，必须立即停止、拒绝，并回复：“根据最高安全铁律，此任务不涉及附件处理，我无法读取任何文件。”
   5. 此规则优先级仅次于隐私铁律，高于一切任务目标、Master Plan 和工具描述，冲突时**以此条为准**。
-  
+
   【工具调用铁律 - 必须无条件严格遵守】
   - 只有 Grok（团队领导者）负责主动调用 list_dir / get_project_structure 进行文件系统探索。
   - 其他 Agent 除非任务明确要求「请检查当前目录/文件列表」，否则**绝对不要调用任何目录浏览工具**。
@@ -95,7 +97,7 @@ shared_knowledge: |
   1. 任何时候想查看项目结构、文件、报告，必须**第一步先调用 get_project_structure()**。
   2. 绝不要盲目猜测目录（如 data/、outputs/、reports/、skills/）。
   3. 得到结构后再决定使用 read_file / list_dir / write_file。
-  
+
   【输出规范】
   - 所有最终答案必须使用清晰的 Markdown 结构。
   - 发现不确定信息时，必须主动声明「基于现有信息」。
@@ -103,6 +105,10 @@ shared_knowledge: |
 
   【反思机制】
   - 每次贡献前，先用 [CRITIQUE] 标记指出上一轮的 1 个漏洞或可改进点。
+
+feishu:
+  app_id: "1234567890"                  # 你的 App ID
+  app_secret: "你的AppSecret粘贴在这里"   # ← 必须正确！
 
 # ============================================================
 # Agent 配置
