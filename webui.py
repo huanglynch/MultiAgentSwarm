@@ -5,26 +5,40 @@
 MultiAgentSwarm WebUI - FastAPI 后端（精简版）
 """
 
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import asyncio
 import json
 import os
 import uuid
 import tempfile
+import time
+import re
+import unicodedata
+import hmac
+import hashlib
+import base64
+import yaml
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-# 在文件顶部添加这些 import（如果没有）
-import re
-import unicodedata
-from pathlib import Path
+
+import lark_oapi as lark
+from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
 # 导入你的 Swarm 系统
 from multi_agent_swarm_v3 import MultiAgentSwarm
+
+# 全局配置（启动时加载）
+feishu_config = {}
+feishu_client: Optional[lark.Client] = None
 
 # ====================== FastAPI 应用 ======================
 app = FastAPI(title="MultiAgentSwarm WebUI", version="3.1.0")
@@ -97,8 +111,14 @@ def update_config(config: ConfigUpdate):
 # ====================== API 端点 ======================
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时初始化"""
+    global feishu_config
+    with open("swarm_config.yaml", "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    feishu_config = cfg.get("feishu", {})
+
     init_swarm()
+    # 启动长连接
+    asyncio.create_task(start_feishu_long_connection())
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -614,6 +634,105 @@ User: {message}"""
         except asyncio.CancelledError:
             pass
 
+
+# ====================== ✨ 飞书官方 SDK 长连接模式 ✨ ======================
+async def start_feishu_long_connection():
+    """启动飞书长连接客户端（官方推荐方式）"""
+    global feishu_client
+    app_id = feishu_config.get("app_id")
+    app_secret = feishu_config.get("app_secret")
+
+    if not app_id or not app_secret:
+        print("❌ Feishu 配置缺少 app_id 或 app_secret")
+        return
+
+    # 创建 API Client
+    feishu_client = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
+
+    def handle_message(data: lark.im.v1.P2ImMessageReceiveV1):
+        """接收消息处理"""
+        try:
+            event = data.event
+            msg = event.message
+            if msg.message_type != "text":
+                return
+
+            content = json.loads(msg.content or "{}").get("text", "").strip()
+            chat_id = msg.chat_id
+            if not content or len(content) < 2:
+                return
+
+            # 判断是否需要回复（私聊 或 群里@机器人）
+            should_reply = msg.chat_type == "p2p"
+            if msg.chat_type == "group" and hasattr(event, "mentions") and event.mentions:
+                for m in event.mentions:
+                    if getattr(m, "id", None) and getattr(m.id, "open_id", None):
+                        should_reply = True
+                        content = re.sub(r'@\S+\s*', '', content).strip()
+                        break
+
+            if not should_reply:
+                return
+
+            # 日志只显示前20个字
+            print(f"📥 Feishu 长连接收到: {content[:20]}...")
+
+            # 【立即提醒用户】
+            reminder = CreateMessageRequest.builder() \
+                .receive_id_type("chat_id") \
+                .request_body(
+                    CreateMessageRequestBody.builder()
+                    .receive_id(chat_id)
+                    .msg_type("text")
+                    .content(json.dumps({"text": "🤖 正在思考中，请稍候..."}))
+                    .build()
+                ).build()
+            feishu_client.im.v1.message.create(reminder)
+
+            # 调用 Swarm 处理
+            answer = swarm.solve(
+                f"[来自飞书] {content}",
+                use_memory=True,
+                memory_key="feishu_long"
+            )
+
+            # 【最终回复】使用 text 类型（最稳定，不会再报 invalid message content）
+            request = CreateMessageRequest.builder() \
+                .receive_id_type("chat_id") \
+                .request_body(
+                    CreateMessageRequestBody.builder()
+                    .receive_id(chat_id)
+                    .msg_type("text")
+                    .content(json.dumps({"text": answer}))
+                    .build()
+                ).build()
+
+            response = feishu_client.im.v1.message.create(request)
+            if response.success():
+                print("✅ 已自动回复完整处理结果")
+            else:
+                print(f"⚠️ 回复失败: {response.msg}")
+
+        except Exception as e:
+            print(f"❌ 处理飞书消息异常: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # 注册事件处理器（只保留消息接收，无任何干扰）
+    event_handler = lark.EventDispatcherHandler.builder("", "") \
+        .register_p2_im_message_receive_v1(handle_message) \
+        .build()
+
+    # 启动长连接
+    cli = lark.ws.Client(app_id, app_secret, event_handler=event_handler, log_level=lark.LogLevel.INFO)
+    threading.Thread(target=cli.start, daemon=True).start()
+    print("🚀 飞书官方长连接客户端已启动（WebSocket 已建立）")
+
+
+async def send_log(msg: str):
+    """实时推送到 WebUI 日志区"""
+    print(f"🪝 {msg}")
+    # 如果需要推送到前端，可在此扩展
 
 # ====================== 启动服务器 ======================
 if __name__ == "__main__":

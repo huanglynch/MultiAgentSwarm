@@ -955,6 +955,11 @@ class MultiAgentSwarm:
 
         # ✨ 新增增强配置
         advanced = cfg.get("advanced_features", {})
+        debate_cfg = advanced.get("adversarial_debate", {})
+        self.adversarial_debate_strategy = debate_cfg.get("trigger_strategy", "quality_based")
+        self.adversarial_debate_threshold = debate_cfg.get("trigger_threshold", 82)
+        self.adversarial_debate_interval = debate_cfg.get("trigger_interval", 2)
+
         self.enable_adversarial_debate = advanced.get("adversarial_debate", {}).get("enabled", True)
         self.enable_meta_critic = advanced.get("meta_critic", {}).get("enabled", True)
         self.enable_task_decomposition = advanced.get("task_decomposition", {}).get("enabled", True)
@@ -1132,6 +1137,7 @@ class MultiAgentSwarm:
 
     ✨ 增强功能:
        🥊 对抗辩论 (Adversarial Debate): {'✅ 启用' if self.enable_adversarial_debate else '❌ 禁用'}
+          └─ 策略: {self.adversarial_debate_strategy} | 阈值: {self.adversarial_debate_threshold}
        🎯 元批评 (Meta-Critic): {'✅ 启用' if self.enable_meta_critic else '❌ 禁用'}
        🏭 任务分解 (Task Decomposition): {'✅ 启用' if self.enable_task_decomposition else '❌ 禁用'}
        🧠 知识图谱 (Knowledge Graph): {'✅ 启用' if self.enable_knowledge_graph else '❌ 禁用'}
@@ -1398,6 +1404,14 @@ class MultiAgentSwarm:
             logging.info(f"📷 处理 {len(image_paths)} 张图片")
             if log_callback:
                 log_callback(f"📷 处理 {len(image_paths)} 张图片")
+
+        # 🔥 附件路径强规范化（兼容 Windows \ 和动态 UUID 文件名污染）
+        import re
+        if "uploads" in task:
+            # 统一转正斜杠 + 清理多余路径
+            task = re.sub(r'uploads\\?/?', 'uploads/', task)          # 统一前缀
+            task = re.sub(r'uploads/[^ \n]+', lambda m: m.group(0).replace('\\', '/'), task)
+            logging.info(f"📎 已规范化附件路径 → {task.split('uploads/')[-1]}")
 
         history: List[Dict] = []
 
@@ -1671,7 +1685,10 @@ class MultiAgentSwarm:
             tracker.checkpoint(f"3.5️⃣ 历史压缩")
 
             # ===== 对抗式辩论与自适应反思 =====
-            if self.mode == "intelligent" and self.reflection_planning:
+            if (self.mode == "intelligent"
+                    and self.reflection_planning
+                    and self.enable_adversarial_debate
+                    and self._should_trigger_debate(round_num, previous_quality)):
                 # ✅ 检查点：辩论前
                 if self._check_cancellation():
                     logging.info(f"🛑 辩论前被取消")
@@ -1819,6 +1836,24 @@ class MultiAgentSwarm:
                     log_callback(f"⚠️ 记忆保存失败")
 
         return final_answer
+
+    def _should_trigger_debate(self, round_num: int, prev_quality: int) -> bool:
+        """按需触发对抗辩论（最终推荐版 - 最清晰）"""
+        # 全局开关关闭时直接跳过
+        if not self.enable_adversarial_debate:
+            return False
+
+        strategy = self.adversarial_debate_strategy  # ← 直接使用你配置的变量
+
+        if strategy == "always":
+            return True
+        elif strategy == "every_n_rounds":
+            return round_num % self.adversarial_debate_interval == 0
+        else:  # quality_based（强烈推荐，默认策略）
+            threshold = self.adversarial_debate_threshold
+            # 第一轮必须辩论（建立质量基准）
+            # 之后只有质量低于阈值才触发 → 大幅节省开销
+            return round_num == 1 or (prev_quality > 0 and prev_quality < threshold)
 
     def _classify_task_complexity(self, task: str) -> str:
         """

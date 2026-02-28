@@ -9,6 +9,13 @@ from pathlib import Path
 
 def tool_function(file_path: str, max_tokens: int = 8000, chunk_size: int = 3000):
     try:
+        # 路径规范化
+        file_path = file_path.replace('\\', '/')
+        if not file_path.startswith('uploads/'):
+            file_path = 'uploads/' + file_path.split('uploads/')[-1]
+
+        logging.info(f"📎 summarize_long_file 尝试读取: {file_path}")
+
         SCRIPT_ROOT = Path(__file__).parent.parent.parent.absolute()
         target_path = Path(file_path)
         if not target_path.is_absolute():
