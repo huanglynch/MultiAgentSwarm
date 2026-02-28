@@ -1,4 +1,4 @@
-# 🚀 MultiAgentSwarm v3.1.0
+**MultiAgentSwarm WebUI v3.1.0（更新版）**  
 **Self-Adaptive Digital Team | 自适应数字团队**
 
 **Enterprise-grade Multi-Agent Collaboration Framework**  
@@ -51,7 +51,11 @@ All without human intervention.
 - Multi-session management + automatic history summarization  
 - One-click toggle of all advanced features + force mode  
 - Perfect Markdown rendering + one-click export  
-- Fully responsive (mobile-ready)
+- Fully responsive (mobile-ready)  
+- **New: File Upload & Attachment Support** — Drag-and-drop or `/api/upload` for PDF/TXT/MD/images (max 10MB). Automatic filename sanitization (Chinese/special chars → safe English). Attachments are auto-parsed (PDF reader, text reader) and injected with smart system instructions to prevent redundant tool calls.  
+- **New: Task Cancel Button** — Real-time cancel via WebSocket.  
+- **New: Heartbeat Keep-alive** — 30s ping/pong for stable long connections.  
+- **New: Full Feishu Official SDK Long Connection** — P2ImMessageReceiveV1 WebSocket. Supports text + file/image attachments (auto-download via `GetMessageResourceRequest`), safe filename sanitization, auto-reply in P2P/group (with @ mention detection). Attachments are seamlessly injected into Swarm context.
 
 ### 📊 Performance Comparison
 
@@ -113,7 +117,10 @@ swarm.solve("Hello", force_complexity="complex")
 - Type any question → real per-Agent streaming with thinking logs  
 - Click ⚙️ Settings → toggle any advanced feature instantly  
 - Sidebar manages all conversation history  
-- Click 💾 Export → download full Markdown record
+- **New: Upload files** (PDF/images/text) → automatically parsed and attached  
+- Click 💾 Export → download full Markdown record  
+- **New: Cancel button** for long-running tasks  
+- **New: Feishu integration** — send text or attach files/images directly in Feishu; Swarm auto-processes and replies
 
 ### 📄 Configuration Reference (swarm_config.yaml)
 
@@ -134,12 +141,16 @@ intelligent_routing:
   enabled: true
   force_complexity: null       # null / simple / medium / complex
 ```
-## 🔧 Troubleshooting
+
+### 🔧 Troubleshooting
 
 - Simple tasks running full mode → ensure `intelligent_routing.enabled: true`  
 - Knowledge Graph not showing → only appears in Complex mode final answer  
 - WebUI streaming not working → check port 8060 is free  
-- Wrong complexity classification → use `force_complexity` to override
+- Wrong complexity classification → use `force_complexity` to override  
+- **New: Chinese filename upload fails** → automatically sanitized by `sanitize_filename()` (Chinese → safe ASCII + UUID prefix)  
+- **New: Feishu attachment not downloading** → ensure `app_id` + `app_secret` configured and `lark-oapi` installed  
+- **New: Long tasks need cancel** → use the dedicated "Cancel" button in WebUI (sends WebSocket cancel message)
 
 ---
 
@@ -160,9 +171,9 @@ Next milestones:
 
 MIT License
 
-**Last updated**: February 26, 2026  
-**Version**: v3.1.0 (Intelligent Routing + Full WebUI)  
-**Author**: Grok Meta-Architect
+**Last updated**: February 28, 2026  
+**Version**: v3.1.0 (Intelligent Routing + Full WebUI + File Upload + Feishu Long Connection)  
+**Author**: Grok Meta-Architect  
 *(Agent names — Grok, Harper, Benjamin, Lucas — inspired by Grok 4.2 and the xAI team)*
 
 ---
@@ -218,7 +229,11 @@ MIT License
 - 多会话管理 + 自动历史总结
 - 一键开关所有高级功能 + 强制模式
 - Markdown 完美渲染 + 一键导出对话记录
-- 响应式设计（移动端完美适配）
+- 响应式设计（移动端完美适配）  
+- **新增：文件上传与附件支持** — 支持 PDF/TXT/MD/图片（最大10MB）。自动中文文件名净化（sanitize_filename）。附件自动解析并注入智能系统指令，防止重复调用工具。  
+- **新增：任务取消按钮** — WebSocket 实时取消长任务。  
+- **新增：心跳保活机制** — 每30秒 ping/pong 保持稳定连接。  
+- **新增：飞书官方 SDK 长连接** — 完整 P2ImMessageReceiveV1 WebSocket。支持纯文本 + 文件/图片附件（自动下载、GetMessageResourceRequest），中文文件名自动净化，P2P/群聊自动回复（@提及检测）。附件无缝注入 Swarm 上下文并自动回复。
 
 ---
 
@@ -286,7 +301,10 @@ swarm.solve("你好", force_complexity="complex")
 - 输入问题 → 自动逐 Agent 流式显示思考与输出
 - 点击 ⚙️ 设置 → 实时开关高级功能
 - 侧边栏管理历史会话
+- **新增：上传文件**（PDF/图片/文本）→ 自动解析并附加
 - 点击 💾 导出 → 下载 Markdown 完整记录
+- **新增：取消按钮** 处理长任务
+- **新增：飞书集成** — 在飞书直接发文字或附件，Swarm 自动处理并回复
 
 ---
 
@@ -318,6 +336,9 @@ intelligent_routing:
 - 知识图谱不显示 → 仅 Complex 模式最终答案会显示
 - WebUI 流式不工作 → 检查 8060 端口是否被占用
 - 分类不准 → 使用 `force_complexity` 手动指定
+- **新增：中文文件名上传失败** → 已由 `sanitize_filename()` 自动净化（中文→安全ASCII + UUID 前缀）
+- **新增：飞书附件下载失败** → 确认 `app_id` + `app_secret` 已配置且安装 `lark-oapi`
+- **新增：长任务需要取消** → 使用 WebUI 专用「Cancel」按钮（WebSocket 取消指令）
 
 ---
 
@@ -338,14 +359,12 @@ intelligent_routing:
 
 MIT License
 
-**最后更新**：2026 年 2 月 26 日  
-**版本**：v3.1.0（智能路由 + WebUI 完整版）  
-**作者**：Grok Meta-Architect
+**最后更新**：2026 年 2 月 28 日  
+**版本**：v3.1.0（智能路由 + WebUI 完整版 + 文件上传 + 飞书长连接）  
+**作者**：Grok Meta-Architect  
 *(Agent 名称 Grok、Harper、Benjamin、Lucas 致敬 Grok 4.2 及 xAI 团队)*
 
 ---
 
 **Enjoy building your own digital team!**  
 **享受构建属于你自己的数字团队吧！** 🚀
-
-
