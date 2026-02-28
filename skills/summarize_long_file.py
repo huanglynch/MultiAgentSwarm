@@ -6,6 +6,7 @@
 - 返回结构更清晰，适合 Agent 后续针对性分析
 """
 from pathlib import Path
+import logging
 
 def tool_function(file_path: str, max_tokens: int = 8000, chunk_size: int = 3000):
     try:
@@ -82,4 +83,5 @@ tool_schema = {
             "required": ["file_path"]
         }
     }
+
 }
