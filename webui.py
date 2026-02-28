@@ -4,10 +4,6 @@
 """
 MultiAgentSwarm WebUI - FastAPI 后端（精简版）
 """
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import asyncio
 import json
 import os
@@ -30,15 +26,18 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-import lark_oapi as lark
-from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
+# 飞书 SDK 延迟加载（未安装时不崩溃）
+lark_oapi = None
+CreateMessageRequest = None
+CreateMessageRequestBody = None
+GetMessageResourceRequest = None
 
 # 导入你的 Swarm 系统
 from multi_agent_swarm_v3 import MultiAgentSwarm
 
 # 全局配置（启动时加载）
 feishu_config = {}
-feishu_client: Optional[lark.Client] = None
+feishu_client = None
 
 # ====================== FastAPI 应用 ======================
 app = FastAPI(title="MultiAgentSwarm WebUI", version="3.1.0")
@@ -117,8 +116,20 @@ async def startup_event():
     feishu_config = cfg.get("feishu", {})
 
     init_swarm()
-    # 启动长连接
-    asyncio.create_task(start_feishu_long_connection())
+
+    # === 严格按要求：appid 和 app_secret 都非空才启用飞书 ===
+    app_id = feishu_config.get("app_id", "").strip()
+    app_secret = feishu_config.get("app_secret", "").strip()
+
+    if app_id and app_secret:
+        print("🚀 飞书配置有效，正在启动长连接服务...")
+        threading.Thread(
+            target=start_feishu_long_connection,
+            daemon=True,
+            name="Feishu-Long-Connection"
+        ).start()
+    else:
+        print("ℹ️  飞书功能已关闭（swarm_config.yaml 中 app_id 或 app_secret 未配置）")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -636,70 +647,159 @@ User: {message}"""
 
 
 # ====================== ✨ 飞书官方 SDK 长连接模式 ✨ ======================
-async def start_feishu_long_connection():
-    """启动飞书长连接客户端（官方推荐方式）"""
-    global feishu_client
-    app_id = feishu_config.get("app_id")
-    app_secret = feishu_config.get("app_secret")
+def start_feishu_long_connection():
+    """启动飞书长连接（仅在配置有效时被调用）"""
+    # nest_asyncio 保护
+    try:
+        import nest_asyncio
+        nest_asyncio.apply()
+    except Exception:
+        pass
 
-    if not app_id or not app_secret:
-        print("❌ Feishu 配置缺少 app_id 或 app_secret")
+    global feishu_client, lark_oapi, CreateMessageRequest, CreateMessageRequestBody, GetMessageResourceRequest
+
+    # 2. SDK 导入检查（使用正确类名）
+    try:
+        import lark_oapi as lark_module
+        from lark_oapi.api.im.v1 import (
+            CreateMessageRequest as Req,
+            CreateMessageRequestBody as ReqBody,
+            GetMessageResourceRequest as ResourceReq   # ← 关键修复：正确类名
+        )
+        lark_oapi = lark_module
+        CreateMessageRequest = Req
+        CreateMessageRequestBody = ReqBody
+        GetMessageResourceRequest = ResourceReq
+        print("✅ lark-oapi 导入成功")
+    except Exception as e:
+        print(f"❌ lark-oapi 导入失败: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return
 
-    # 创建 API Client
-    feishu_client = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
+    # 3. 启动长连接
+    try:
+        feishu_client = lark_oapi.Client.builder().app_id(feishu_config.get("app_id")).app_secret(feishu_config.get("app_secret")).build()
 
-    def handle_message(data: lark.im.v1.P2ImMessageReceiveV1):
-        """接收消息处理"""
-        try:
-            event = data.event
-            msg = event.message
-            if msg.message_type != "text":
-                return
+        def handle_message(data: lark_oapi.im.v1.P2ImMessageReceiveV1):
+            try:
+                event = data.event
+                msg = event.message
+                chat_id = msg.chat_id
+                message_id = msg.message_id
+                if not message_id or not chat_id:
+                    return
 
-            content = json.loads(msg.content or "{}").get("text", "").strip()
-            chat_id = msg.chat_id
-            if not content or len(content) < 2:
-                return
+                content_str = msg.content or "{}"
+                content_json = json.loads(content_str)
 
-            # 判断是否需要回复（私聊 或 群里@机器人）
-            should_reply = msg.chat_type == "p2p"
-            if msg.chat_type == "group" and hasattr(event, "mentions") and event.mentions:
-                for m in event.mentions:
-                    if getattr(m, "id", None) and getattr(m.id, "open_id", None):
-                        should_reply = True
-                        content = re.sub(r'@\S+\s*', '', content).strip()
-                        break
+                full_message = ""
+                content = ""
 
-            if not should_reply:
-                return
+                # ==================== 处理附件（已修复 field validation） ====================
+                if msg.message_type in ("file", "image"):
+                    file_key = None
+                    original_name = "unknown_file"
+                    file_type = "file"  # 默认
 
-            # 日志只显示前20个字
-            print(f"📥 Feishu 长连接收到: {content[:20]}...")
+                    if msg.message_type == "image":
+                        file_key = content_json.get("image_key")
+                        original_name = f"image_{int(time.time())}.jpg"
+                        file_type = "image"
+                    else:
+                        file_key = content_json.get("file_key")
+                        original_name = content_json.get("file_name", "file")
+                        file_type = "file"
 
-            # 【立即提醒用户】
-            reminder = CreateMessageRequest.builder() \
-                .receive_id_type("chat_id") \
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(chat_id)
-                    .msg_type("text")
-                    .content(json.dumps({"text": "🤖 正在思考中，请稍候..."}))
-                    .build()
-                ).build()
-            feishu_client.im.v1.message.create(reminder)
+                    if not file_key:
+                        return
 
-            # 调用 Swarm 处理
-            answer = swarm.solve(
-                f"[来自飞书] {content}",
-                use_memory=True,
-                memory_key="feishu_long"
-            )
+                    print(f"📥 Feishu 收到附件: {original_name} (type={file_type})")
 
-            # 【最终回复】使用 text 类型（最稳定，不会再报 invalid message content）
-            request = CreateMessageRequest.builder() \
-                .receive_id_type("chat_id") \
-                .request_body(
+                    # === 关键修复：必须传入 type 参数 ===
+                    request = GetMessageResourceRequest.builder() \
+                        .message_id(message_id) \
+                        .file_key(file_key) \
+                        .type(file_type) \
+                        .build()
+
+                    response = feishu_client.im.v1.message_resource.get(request)
+
+                    if not response.success():
+                        print(f"❌ 下载附件失败: {response.msg}")
+                        # 下载失败也友好回复用户
+                        reminder = CreateMessageRequest.builder() \
+                            .receive_id_type("chat_id") \
+                            .request_body(
+                            CreateMessageRequestBody.builder()
+                            .receive_id(chat_id)
+                            .msg_type("text")
+                            .content(
+                                json.dumps({"text": f"⚠️ 已收到您的附件 {original_name}，但下载失败，请尝试重新发送"}))
+                            .build()
+                        ).build()
+                        feishu_client.im.v1.message.create(reminder)
+                        return
+
+                    # 保存文件（复用你的净化函数）
+                    safe_stem = sanitize_filename(Path(original_name).stem)
+                    safe_filename = f"{uuid.uuid4().hex[:8]}_{safe_stem}{Path(original_name).suffix.lower()}"
+                    upload_dir = Path("uploads")
+                    upload_dir.mkdir(exist_ok=True)
+                    file_path = upload_dir / safe_filename
+
+                    with open(file_path, "wb") as f:
+                        f.write(response.raw.content)
+
+                    print(f"✅ 附件已保存: {file_path} ({len(response.raw.content) / 1024:.1f} KB)")
+                    full_message = f"[来自飞书] 用户发送了附件\n\n📎 附件:\n- {file_path}"
+
+                    # 成功提醒
+                    reminder = CreateMessageRequest.builder() \
+                        .receive_id_type("chat_id") \
+                        .request_body(
+                        CreateMessageRequestBody.builder()
+                        .receive_id(chat_id)
+                        .msg_type("text")
+                        .content(json.dumps({"text": f"🤖 已成功收到附件《{original_name}》，正在分析处理中..."}))
+                        .build()
+                    ).build()
+                    feishu_client.im.v1.message.create(reminder)
+
+                # ==================== 处理纯文本 ====================
+                elif msg.message_type == "text":
+                    content = content_json.get("text", "").strip()
+                    if not content:
+                        return
+                    full_message = f"[来自飞书] {content}"
+                else:
+                    return
+
+                # ==================== 是否需要回复 ====================
+                should_reply = msg.chat_type == "p2p"
+                if msg.chat_type == "group" and hasattr(event, "mentions") and event.mentions:
+                    for m in event.mentions:
+                        if getattr(m.id, "open_id", None):
+                            should_reply = True
+                            if msg.message_type == "text":
+                                content = re.sub(r'@\S+\s*', '', content).strip()
+                                full_message = f"[来自飞书] {content}"
+                            break
+                if not should_reply:
+                    return
+
+                print(f"📥 Feishu 长连接收到消息: {full_message[:70]}...")
+
+                # Swarm 处理（现在附件路径会正确传入）
+                answer = swarm.solve(
+                    full_message,
+                    use_memory=True,
+                    memory_key="feishu_long"
+                )
+
+                request = CreateMessageRequest.builder() \
+                    .receive_id_type("chat_id") \
+                    .request_body(
                     CreateMessageRequestBody.builder()
                     .receive_id(chat_id)
                     .msg_type("text")
@@ -707,26 +807,34 @@ async def start_feishu_long_connection():
                     .build()
                 ).build()
 
-            response = feishu_client.im.v1.message.create(request)
-            if response.success():
-                print("✅ 已自动回复完整处理结果")
-            else:
-                print(f"⚠️ 回复失败: {response.msg}")
+                response = feishu_client.im.v1.message.create(request)
+                if response.success():
+                    print("✅ 已自动回复处理结果")
+                else:
+                    print(f"⚠️ 回复失败: {response.msg}")
 
-        except Exception as e:
-            print(f"❌ 处理飞书消息异常: {e}")
-            import traceback
-            traceback.print_exc()
+            except Exception as e:
+                print(f"❌ 处理飞书消息异常: {e}")
+                import traceback
+                traceback.print_exc()
 
-    # 注册事件处理器（只保留消息接收，无任何干扰）
-    event_handler = lark.EventDispatcherHandler.builder("", "") \
-        .register_p2_im_message_receive_v1(handle_message) \
-        .build()
+        # 注册并启动
+        event_handler = lark_oapi.EventDispatcherHandler.builder("", "") \
+            .register_p2_im_message_receive_v1(handle_message) \
+            .build()
 
-    # 启动长连接
-    cli = lark.ws.Client(app_id, app_secret, event_handler=event_handler, log_level=lark.LogLevel.INFO)
-    threading.Thread(target=cli.start, daemon=True).start()
-    print("🚀 飞书官方长连接客户端已启动（WebSocket 已建立）")
+        cli = lark_oapi.ws.Client(
+            app_id=feishu_config.get("app_id"),
+            app_secret=feishu_config.get("app_secret"),
+            event_handler=event_handler,
+            log_level=lark_oapi.LogLevel.INFO
+        )
+
+        print("🚀 飞书官方长连接客户端已启动（WebSocket 已建立）")
+        cli.start()
+
+    except Exception as e:
+        print(f"⚠️ 飞书长连接启动失败: {e}")
 
 
 async def send_log(msg: str):
