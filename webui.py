@@ -45,10 +45,9 @@ app = FastAPI(title="MultiAgentSwarm WebUI", version="3.1.0")
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# 全局变量
+# ====================== 全局变量（必须在这里定义！） ======================
 swarm: Optional[MultiAgentSwarm] = None
 conversations: Dict[str, List[Dict]] = {}
-
 
 # ====================== Pydantic 模型 ======================
 class ConfigUpdate(BaseModel):
@@ -80,6 +79,7 @@ def init_swarm():
 # ====================== 工具函数 ======================
 def get_or_create_session(session_id: Optional[str] = None) -> str:
     """获取或创建会话 ID"""
+    global conversations  # ← 新增这一行（关键！）
     if not session_id:
         session_id = str(uuid.uuid4())
     if session_id not in conversations:
@@ -299,6 +299,7 @@ async def upload_file(file: UploadFile = File(...)):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket 端点（支持真实流式输出 + 心跳保活 + 取消功能）"""
+    global conversations  # ← 新增这一行（关键！）
     await websocket.accept()
     import time
     start_time = time.time()
