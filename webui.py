@@ -44,6 +44,10 @@ app = FastAPI(title="MultiAgentSwarm WebUI", version="3.1.0")
 
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
+# ====================== ✨ 输出文件下载支持（用户需求核心） ======================
+# 让 uploads/ 目录下的修改后文件可直接下载（兼容 WebUI + 飞书）
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+print("✅ /uploads 下载服务已启用（修改后的 Excel/报告可直接点击下载）")
 
 # ====================== 全局变量（必须在这里定义！） ======================
 swarm: Optional[MultiAgentSwarm] = None
