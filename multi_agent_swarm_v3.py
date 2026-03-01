@@ -635,7 +635,7 @@ class Agent:
             result = self.tool_map[func_name](**args)
 
             return {
-                "role": "tool",
+                "role": "observation",  # ← 关键修改，对应架构图红色 Observation
                 "tool_call_id": tool_call.id,
                 "name": func_name,
                 "content": str(result)
@@ -691,7 +691,6 @@ class Agent:
             )
             system_extra = critique_prompt + "\n\n" + system_extra
 
-        # 在 system_prompt = f"{self.role}\n..." 之前加：
         # 🔥【Plan 注入】每个 Agent 都知道当前 Master Plan（最小改动）
         plan_summary = next(
             (h["content"] for h in history if "Master Plan" in str(h.get("content", ""))),
@@ -701,10 +700,23 @@ class Agent:
         # 构建系统提示词（Plan 摘要放在最前面，让所有 Agent 对齐）
         system_prompt = (
             f"{self.role}\n"
-            f"【当前Master Plan摘要】\n{plan_summary}\n\n"  # ← 直接内嵌
+            f"【当前Master Plan摘要】\n{plan_summary}\n\n"
             f"{self.shared_knowledge}\n"
             f"{system_extra}\n"
-            "你是多智能体协作团队的一员，请提供有价值、准确、有深度的贡献。"
+            "你是多智能体协作团队的一员，请提供有价值、准确、有深度的贡献。\n\n"
+
+            # ==================== 【新增】强制 ReAct 三段式（对应架构图） ====================
+            "【强制思考格式 - 必须严格遵守】\n"
+            "无论是否调用工具，都请在回复最开头先按以下格式输出：\n"
+            "Thinking: （怎么解决用户的问题，原因分析）\n"
+            "Action: （需要调用的 Function 名称，或写 Final Answer）\n"
+            "Action Input: （Function 的参数JSON，或最终答案摘要）\n\n"
+            "示例：\n"
+            "Thinking: 用户问 Transformer 注意力机制，我需要先回忆原理再查最新进展。\n"
+            "Action: web_search\n"
+            "Action Input: {\"query\": \"Transformer attention mechanism latest\"}\n\n"
+            "用户和前端会直接看到这个思考过程，提升透明度和调试能力。"
+            # =============================================================================
         )
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -1701,6 +1713,20 @@ class MultiAgentSwarm:
 
                 quality_score, decision = self._adversarial_debate(history, round_num)
                 tracker.checkpoint(f"4️⃣ 第{round_num}轮辩论")
+                # ✨【动态更新 Master Plan】——对应架构图“更新prompt”循环箭头
+                if round_num % 3 == 0 or quality_score < 75:  # 每3轮或质量低时刷新
+                    new_plan = self._generate_detailed_plan(task, history)
+                    if new_plan:
+                        # 替换旧 Plan（保持 history 干净）
+                        for i, msg in enumerate(history):
+                            if "Master Plan" in str(msg.get("content", "")):
+                                history[i] = {"speaker": "System", "content": new_plan}
+                                break
+                        else:
+                            history.insert(0, {"speaker": "System", "content": new_plan})
+                        if log_callback:
+                            log_callback("📋 Master Plan 已动态刷新")
+                        tracker.checkpoint(f"2.6️⃣ Plan 动态更新")
 
                 # ✅ 检查点：辩论后
                 if self._check_cancellation():
@@ -1775,7 +1801,20 @@ class MultiAgentSwarm:
             "speaker": "System",
             "content": (
                 "请综合以上全部讨论，给出最准确、最完整、最高质量的最终答案。\n"
-                "要求：逻辑严密、信息完整、结构清晰、整合知识图谱。"
+                "要求：逻辑严密、信息完整、结构清晰、整合知识图谱。\n\n"
+
+                # ==================== 【新增】三种输出形态（对应架构图） ====================
+                "如果答案适合结构化展示（对比表、步骤清单、关键数据等），"
+                "请在**答案最末尾**附加以下格式的智能卡片：\n"
+                "```json\n"
+                "{\n"
+                '  "type": "card",\n'
+                '  "title": "结果总结",\n'
+                '  "data": {"要点1": "内容1", "要点2": "内容2"}\n'
+                "}\n"
+                "```\n"
+                "否则请直接用自然语言 Markdown 输出即可。"
+                # =========================================================================
             )
         })
 
