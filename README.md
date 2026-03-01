@@ -4,7 +4,9 @@
 
 **Enterprise-grade Multi-Agent Collaboration Framework with Full ReAct Visibility**  
 **一个真正“看得见思考”的活的数字组织**
-
+<p align="center">
+  <img src="images/architecture-diagram.png" alt="MultiAgentSwarm v3.2.0 Architecture" width="95%" style="border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+</p>
 ---
 
 ## 🌟 English Version | 英文版
