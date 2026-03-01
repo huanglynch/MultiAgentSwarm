@@ -1,18 +1,55 @@
-# MultiAgentSwarm v3.1.0 依赖（2026-02-25 更新）
+# ================================================
+# MultiAgentSwarm v3.1.0 完整依赖清单（融合版）
+# 更新日期: 2026-03-01
+# 融合内容：你最新列表 + 科学计算库 + OpenSandbox 双模式 + PDF 支持
+# ================================================
+
+# ====================== 核心依赖（必须） ======================
 openai>=1.35.0
 pyyaml>=6.0
 requests>=2.32.0
 beautifulsoup4>=4.12.0
-sentence-transformers>=3.0.0
-chromadb>=0.5.0
 duckduckgo-search>=6.0.0
-fitz
 
-# 可选加速（推荐安装）
+# ====================== 向量记忆 & 嵌入模型 ======================
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+
+# ====================== 科学计算 & Legacy 沙箱必需 ======================
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+
+# ====================== PDF 处理（pdf_reader 工具必需） ======================
+PyMuPDF>=1.24.0          # import fitz（推荐写法）
+
+# ====================== OpenSandbox（强烈推荐，自动硬隔离） ======================
+# 安装后 code_executor.py 会自动切换为 Docker 生产级沙箱
+opensandbox>=0.1.0
+opensandbox-code-interpreter>=0.1.0
+opensandbox-server>=0.1.0
+
+# ====================== 模型加速（强烈推荐安装） ======================
 torch>=2.0.0
 torchvision>=0.15.0
 torchaudio>=2.0.0
 
-# 开发/调试工具
-
+# ====================== 开发/调试工具 ======================
 tqdm>=4.66.0
+rich>=13.0.0             # 美化终端日志（可选但推荐）
+loguru>=0.7.0            # 结构化日志（可选）
+
+# ====================== 安装说明（强烈建议按顺序执行） ======================
+# 1. 推荐方式（最快）：
+#    uv pip install -r requirements.txt
+
+# 2. 普通 pip 方式：
+#    pip install -r requirements.txt
+
+# 3. OpenSandbox 特别安装（安装后自动升级沙箱，无需改代码）：
+#    uv pip install opensandbox opensandbox-code-interpreter opensandbox-server
+#    opensandbox-server init-config ~/.sandbox.toml --example docker
+#    # 新开终端运行服务（保持后台运行）：
+#    opensandbox-server
+
+# 重启 MultiAgentSwarm 后，控制台会自动检测并提示当前沙箱模式。
