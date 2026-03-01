@@ -634,11 +634,12 @@ class Agent:
 
             result = self.tool_map[func_name](**args)
 
+            # ✅ 修复：role 必须是 'tool'（NVIDIA 兼容），但内容前缀【Observation】让前端和日志完美显示红色 Observation 效果
             return {
-                "role": "observation",  # ← 关键修改，对应架构图红色 Observation
+                "role": "tool",  # ← 改回 tool（必须！）
                 "tool_call_id": tool_call.id,
                 "name": func_name,
-                "content": str(result)
+                "content": f"【Observation】\n{result}"  # ← 关键：前缀让用户一眼看出是 Observation
             }
         except Exception as e:
             logging.error(f"工具执行失败 {func_name}: {e}")
@@ -646,7 +647,7 @@ class Agent:
                 "role": "tool",
                 "tool_call_id": tool_call.id,
                 "name": func_name,
-                "content": f"Tool error: {str(e)}"
+                "content": f"【Observation】\nTool error: {str(e)}"
             }
 
     def generate_response(
