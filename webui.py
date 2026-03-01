@@ -691,6 +691,29 @@ def start_feishu_long_connection():
                 if not message_id or not chat_id:
                     return
 
+                # ====================== 【新增】飞书收到消息后立即在原消息下方打 👍 ======================
+                # 目的：实现图片中「Nanobot-MiniPC 👍」效果，非回复消息，立即反馈
+                try:
+                    reaction_req = lark_oapi.BaseRequest.builder() \
+                        .http_method(lark_oapi.HttpMethod.POST) \
+                        .uri(f"/open-apis/im/v1/messages/{message_id}/reactions") \
+                        .token_types({lark_oapi.AccessTokenType.TENANT}) \
+                        .body({
+                        "reaction_type": {
+                            "emoji_type": "THUMBSUP"  # 👍 官方正确代码（THUMBSUP = 点赞）
+                        }
+                    }) \
+                        .build()
+
+                    reaction_resp = feishu_client.request(reaction_req)
+                    if reaction_resp.success():
+                        print(f"✅ 👍 已为消息 {message_id[:12]}... 添加收到确认（原消息下方可见）")
+                    else:
+                        print(f"⚠️ 👍 添加失败（不影响处理）: {reaction_resp.msg}")
+                except Exception as e:
+                    print(f"⚠️ 添加 👍 反应异常（已隔离，不阻塞主流程）: {str(e)[:80]}")
+                # ====================== 新增结束 ======================
+
                 content_str = msg.content or "{}"
                 content_json = json.loads(content_str)
 
