@@ -1918,90 +1918,162 @@ class MultiAgentSwarm:
 
     def _classify_task_complexity(self, task: str) -> str:
         """
-        ✨ 智能任务分类器
+        ✨ 智能任务分类器（强化稳定版）
         返回: "simple" | "medium" | "complex"
         """
-        # 快速规则过滤（0ms，无API调用）
         task_lower = task.lower().strip()
 
-        # 新增：对话跟进场景（“继续”“详细说说”“再解释一下”）强制 medium，防止简单问题被误判 complex
+        # 快速规则过滤（0ms，无API调用）
         if any(kw in task_lower for kw in ["继续", "详细", "再", "然后", "为什么", "怎么", "解释一下",
-                                           "more details", "elaborate", "next"]):
-            if len(task) < 150:  # 短跟进一定是 medium
-                logging.info("🟡 对话跟进 → MEDIUM 模式")
-                return "medium"
+                                           "more details", "elaborate", "next"]) and len(task) < 150:
+            logging.info("🟡 对话跟进 → MEDIUM 模式")
+            return "medium"
 
-        # 简单任务特征（直接判定）
         simple_patterns = [
-            # 问候类
-            len(task) < 20 and any(word in task_lower for word in ["你好", "hi", "hello", "hey", "谢谢", "thank", "嘿", "thank", "ok", "好的"]),
-            # 简单问答
+            len(task) < 20 and any(word in task_lower for word in ["你好", "hi", "hello", "hey", "谢谢", "thank", "嘿", "ok", "好的"]),
             task.endswith("?") and len(task) < 30,
-            # 单一查询
             task.startswith(("什么是", "who is", "when", "where")) and len(task) < 50,
         ]
-
         if any(simple_patterns):
             logging.info("🟢 任务分类: SIMPLE (规则匹配)")
             return "simple"
 
-        # 复杂任务特征（直接判定）
         complex_patterns = [
-            # 明确要求协作
             any(word in task_lower for word in ["分析报告", "深度", "对比", "评估", "战略", "方案", "代码审查"]),
-            # 多步骤任务
             task.count("并且") + task.count("然后") + task.count("同时") + task.count("and then") >= 2,
-            # 文件操作
-            any(word in task_lower for word in ["写入", "保存", "生成文件", "write to", "save to"]),
-            # 长文本
+            any(word in task_lower for word in ["写入", "保存", "生成文件", "write to", "save to", "下载", "导出"]),
             len(task) > 200,
         ]
-
         if any(complex_patterns):
             logging.info("🔴 任务分类: COMPLEX (规则匹配)")
             return "complex"
 
-        # 中等复杂度：用 Leader 快速判断（单次 API 调用，~0.5秒）
-        try:
-            classify_prompt = (
-                f"任务: {task}\n\n"
-                "请判断此任务的复杂度（仅回复一个词）：\n"
-                "- simple: 简单问候/单句问答/查询\n"
-                "- medium: 需要分析但不复杂（如解释概念、简单建议）\n"
-                "- complex: 需要深度分析/多步骤/协作\n\n"
-                "回复格式: 仅输出 simple/medium/complex"
-            )
+        # === 强化版 AI 判断（带重试 + 更好提示）===
+        classify_prompt = (
+            f"任务: {task}\n\n"
+            "请严格只回复一个词判断复杂度（不要解释，不要多余字符）：\n"
+            "- simple: 简单问候/单句问答/查询\n"
+            "- medium: 需要分析但不复杂（如解释概念、简单建议）\n"
+            "- complex: 需要深度分析/多步骤/协作/生成报告/编辑/下载\n\n"
+            "回复格式: 仅输出 simple/medium/complex"
+        )
 
-            response = self.leader.client.chat.completions.create(
-                model=self.leader.model,
-                messages=[
-                    {"role": "system", "content": "你是任务复杂度分类器，仅回复 simple/medium/complex"},
-                    {"role": "user", "content": classify_prompt}
-                ],
-                temperature=0.0,
-                max_tokens=10,
-                stream=False
-            )
+        for attempt in range(2):  # 最多重试1次
+            try:
+                response = self.leader.client.chat.completions.create(
+                    model=self.leader.model,
+                    messages=[
+                        {"role": "system", "content": "你是任务复杂度分类器。必须严格只回复一个词：simple / medium / complex"},
+                        {"role": "user", "content": classify_prompt}
+                    ],
+                    temperature=0.0,
+                    max_tokens=10,
+                    stream=False
+                )
 
-            # ✅ 核心修复：处理 None 返回值
-            content = response.choices[0].message.content
+                content = (response.choices[0].message.content or "").strip().lower()
 
-            if content is None or not content.strip():
-                logging.warning("⚠️ API 返回空值，默认使用 medium")
-                return "medium"
+                if content in ["simple", "medium", "complex"]:
+                    logging.info(f"🟡 任务分类: {content.upper()} (AI判断，第{attempt+1}次)")
+                    return content
+                else:
+                    logging.warning(f"⚠️ 第{attempt+1}次分类返回无效值: '{content}'，尝试重试...")
 
-            complexity = content.strip().lower()
+            except Exception as e:
+                logging.warning(f"⚠️ 第{attempt+1}次分类失败: {e}")
 
-            if complexity in ["simple", "medium", "complex"]:
-                logging.info(f"🟡 任务分类: {complexity.upper()} (AI判断)")
-                return complexity
-            else:
-                logging.warning(f"⚠️ AI分类返回无效值: {complexity}，默认使用 medium")
-                return "medium"
+        # 两次都失败 → 保守 fallback 到 complex（比原来 medium 更合理）
+        logging.warning("⚠️ 分类器连续两次失败，默认使用 COMPLEX（更安全）")
+        # return "complex"
+        return medium
 
-        except Exception as e:
-            logging.error(f"❌ 任务分类失败: {e}，默认使用 medium")
-            return "medium"
+
+    # def _classify_task_complexity(self, task: str) -> str:
+    #     """
+    #     ✨ 智能任务分类器
+    #     返回: "simple" | "medium" | "complex"
+    #     """
+    #     # 快速规则过滤（0ms，无API调用）
+    #     task_lower = task.lower().strip()
+    #
+    #     # 新增：对话跟进场景（“继续”“详细说说”“再解释一下”）强制 medium，防止简单问题被误判 complex
+    #     if any(kw in task_lower for kw in ["继续", "详细", "再", "然后", "为什么", "怎么", "解释一下",
+    #                                        "more details", "elaborate", "next"]):
+    #         if len(task) < 150:  # 短跟进一定是 medium
+    #             logging.info("🟡 对话跟进 → MEDIUM 模式")
+    #             return "medium"
+    #
+    #     # 简单任务特征（直接判定）
+    #     simple_patterns = [
+    #         # 问候类
+    #         len(task) < 20 and any(word in task_lower for word in ["你好", "hi", "hello", "hey", "谢谢", "thank", "嘿", "thank", "ok", "好的"]),
+    #         # 简单问答
+    #         task.endswith("?") and len(task) < 30,
+    #         # 单一查询
+    #         task.startswith(("什么是", "who is", "when", "where")) and len(task) < 50,
+    #     ]
+    #
+    #     if any(simple_patterns):
+    #         logging.info("🟢 任务分类: SIMPLE (规则匹配)")
+    #         return "simple"
+    #
+    #     # 复杂任务特征（直接判定）
+    #     complex_patterns = [
+    #         # 明确要求协作
+    #         any(word in task_lower for word in ["分析报告", "深度", "对比", "评估", "战略", "方案", "代码审查"]),
+    #         # 多步骤任务
+    #         task.count("并且") + task.count("然后") + task.count("同时") + task.count("and then") >= 2,
+    #         # 文件操作
+    #         any(word in task_lower for word in ["写入", "保存", "生成文件", "write to", "save to"]),
+    #         # 长文本
+    #         len(task) > 200,
+    #     ]
+    #
+    #     if any(complex_patterns):
+    #         logging.info("🔴 任务分类: COMPLEX (规则匹配)")
+    #         return "complex"
+    #
+    #     # 中等复杂度：用 Leader 快速判断（单次 API 调用，~0.5秒）
+    #     try:
+    #         classify_prompt = (
+    #             f"任务: {task}\n\n"
+    #             "请判断此任务的复杂度（仅回复一个词）：\n"
+    #             "- simple: 简单问候/单句问答/查询\n"
+    #             "- medium: 需要分析但不复杂（如解释概念、简单建议）\n"
+    #             "- complex: 需要深度分析/多步骤/协作\n\n"
+    #             "回复格式: 仅输出 simple/medium/complex"
+    #         )
+    #
+    #         response = self.leader.client.chat.completions.create(
+    #             model=self.leader.model,
+    #             messages=[
+    #                 {"role": "system", "content": "你是任务复杂度分类器，仅回复 simple/medium/complex"},
+    #                 {"role": "user", "content": classify_prompt}
+    #             ],
+    #             temperature=0.0,
+    #             max_tokens=10,
+    #             stream=False
+    #         )
+    #
+    #         # ✅ 核心修复：处理 None 返回值
+    #         content = response.choices[0].message.content
+    #
+    #         if content is None or not content.strip():
+    #             logging.warning("⚠️ API 返回空值，默认使用 medium")
+    #             return "medium"
+    #
+    #         complexity = content.strip().lower()
+    #
+    #         if complexity in ["simple", "medium", "complex"]:
+    #             logging.info(f"🟡 任务分类: {complexity.upper()} (AI判断)")
+    #             return complexity
+    #         else:
+    #             logging.warning(f"⚠️ AI分类返回无效值: {complexity}，默认使用 medium")
+    #             return "medium"
+    #
+    #     except Exception as e:
+    #         logging.error(f"❌ 任务分类失败: {e}，默认使用 medium")
+    #         return "medium"
 
     def _solve_simple(
             self,
