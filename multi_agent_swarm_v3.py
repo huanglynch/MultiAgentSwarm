@@ -1925,7 +1925,7 @@ class MultiAgentSwarm:
 
         # 快速规则过滤（0ms，无API调用）
         if any(kw in task_lower for kw in ["继续", "详细", "再", "然后", "为什么", "怎么", "解释一下",
-                                           "more details", "elaborate", "next"]) and len(task) < 150:
+                                        "more details", "elaborate", "next"]) and len(task) < 150:
             logging.info("🟡 对话跟进 → MEDIUM 模式")
             return "medium"
 
@@ -1950,7 +1950,7 @@ class MultiAgentSwarm:
 
         # === 强化版 AI 判断（带重试 + 更好提示）===
         classify_prompt = (
-            f"任务: {task}\n\n"
+            f"任务: {task[:500]}\n\n"  # 限制长度避免超时
             "请严格只回复一个词判断复杂度（不要解释，不要多余字符）：\n"
             "- simple: 简单问候/单句问答/查询\n"
             "- medium: 需要分析但不复杂（如解释概念、简单建议）\n"
@@ -1968,24 +1968,41 @@ class MultiAgentSwarm:
                     ],
                     temperature=0.0,
                     max_tokens=10,
+                    timeout=5.0,  # 添加超时
                     stream=False
                 )
 
-                content = (response.choices[0].message.content or "").strip().lower()
+                # 防御性处理
+                if not response or not response.choices:
+                    logging.warning(f"⚠️ 第{attempt+1}次分类返回无效响应")
+                    continue
+                    
+                content = response.choices[0].message.content
+                if content is None:
+                    logging.warning(f"⚠️ 第{attempt+1}次分类返回 None")
+                    continue
+                    
+                content = content.strip().lower()
 
-                if content in ["simple", "medium", "complex"]:
-                    logging.info(f"🟡 任务分类: {content.upper()} (AI判断，第{attempt+1}次)")
-                    return content
+                # 模糊匹配（处理 "simple." "Simple\n" 等情况）
+                if "simple" in content and "complex" not in content:
+                    logging.info(f"🟢 任务分类: SIMPLE (AI判断，第{attempt+1}次)")
+                    return "simple"
+                elif "complex" in content:
+                    logging.info(f"🔴 任务分类: COMPLEX (AI判断，第{attempt+1}次)")
+                    return "complex"
+                elif "medium" in content:
+                    logging.info(f"🟡 任务分类: MEDIUM (AI判断，第{attempt+1}次)")
+                    return "medium"
                 else:
-                    logging.warning(f"⚠️ 第{attempt+1}次分类返回无效值: '{content}'，尝试重试...")
+                    logging.warning(f"⚠️ 第{attempt+1}次分类返回无效值: '{content}'")
 
             except Exception as e:
                 logging.warning(f"⚠️ 第{attempt+1}次分类失败: {e}")
 
-        # 两次都失败 → 保守 fallback 到 complex（比原来 medium 更合理）
-        logging.warning("⚠️ 分类器连续两次失败，默认使用 COMPLEX（更安全）")
-        # return "complex"
-        return medium
+        # 两次都失败 → 回退到 MEDIUM（你要求的行为）
+        logging.warning("⚠️ 分类器连续失败，默认使用 MEDIUM（安全回退）")
+        return "medium"  # ← 修复：原代码这里写成了 `medium`（没有引号，是未定义变量）
 
 
     # def _classify_task_complexity(self, task: str) -> str:
