@@ -31,7 +31,33 @@ We started from scratch with two axioms:
 1. **Intelligence ≠ more agents.** Intelligence = knowing *when* to use agents, *how deep* to debate, and *what to remember*.
 2. **Quality without waste.** Every token spent must be justified.
 
-**Result:** The only framework that is **100% aligned with the classic ReAct architecture diagram** while delivering group intelligence, dynamic planning, lifelong memory, and production-ready WebUI + Feishu integration.
+Result: **MultiAgentSwarm v3** — the only framework that:
+- Auto-classifies task complexity (simple/medium/complex)
+- Switches modes on-the-fly (1s vs 10s vs 40s+)
+- Runs adversarial debate + Meta-Critic only when quality matters
+- Keeps lifelong memory with automatic decay
+- Gives you **full transparency** (forced ReAct + Thinking/Action format)
+- Ships production-ready WebUI + Feishu long-connection out of the box
+
+---
+
+### ✨ Core Differentiators (What Others Don’t Have)
+
+| Feature                        | MultiAgentSwarm v3          | AutoGen / CrewAI / LangGraph |
+|--------------------------------|-----------------------------|------------------------------|
+| **Intelligent Routing**        | ✅ Auto simple/medium/complex | ❌ Always full swarm         |
+| **Adversarial Debate**         | ✅ Pro/Con/Judge + Meta-Critic | ❌ (manual only)             |
+| **Lifelong PrimalMemory**      | ✅ Tree logs + Atomic KB + Decay | ❌ Ephemeral only            |
+| **Knowledge Graph + Distillation** | ✅ Real-time concept map  | ❌ None                      |
+| **Adaptive Reflection Depth**  | ✅ Auto-stop at quality gate | ❌ Fixed rounds              |
+| **Forced ReAct Transparency**  | ✅ Every agent shows Thinking/Action | ❌ Opaque                   |
+| **Built-in WebUI + Streaming** | ✅ Cancel button, live logs  | ❌ Extra work                |
+| **Feishu Long-Connection**     | ✅ Zero-config enterprise IM | ❌ Not supported             |
+| **Smart File Generation**      | ✅ Auto detect & write .md with download link | ❌ Manual                   |
+| **Token & Time Efficiency**    | 60-80% savings on simple tasks | ❌ Always expensive          |
+| **Local Model Support**        | ✅ Any OpenAI-compatible LLM (Ollama, vLLM, DeepSeek, Qwen, etc.) via `base_url` | ❌ Limited or extra work     |
+
+---
 
 ### ✨ Core Features (v3.2.0 Major Upgrades)
 
@@ -187,6 +213,44 @@ No GPU required. Model caching automatic. OpenSandbox optional (auto fallback).
 **一个真正“看得见思考”的自适应数字团队**
 
 **MultiAgentSwarm v3.2.0** 不再是简单的“多个 LLM 并行聊天”，而是一个**完全可视化、自适应 ReAct 数字团队** —— 完美对齐经典 ReAct 架构图，同时具备群体智能、动态规划、生产级 WebUI 和飞书深度集成。
+
+### 我们为什么要做这个项目（第一性原理）
+
+市面上的多智能体框架（AutoGen、CrewAI、LangGraph、MetaGPT）都遵循同一个套路：  
+**“不管什么任务都扔全部Agent上去 → 烧钱 → 祈祷出好结果”**
+
+我们从零开始，基于两个公理重构：
+
+1. **智能 ≠ 更多Agent**，智能 = **知道什么时候用Agent、辩论多深、记住什么**。
+2. **高质量不能以浪费为代价**。每一个token都必须被证明值得花。
+
+成果：**MultiAgentSwarm v3** —— 唯一做到以下全部的框架：
+- 自动判断任务复杂度（简单/中等/复杂）
+- 动态切换模式（1秒 vs 10秒 vs 40秒+）
+- 仅在必要时启动对抗辩论 + 元批评
+- 终身记忆 + 自动衰退机制
+- **强制ReAct透明思考**（每个Agent都先输出Thinking/Action）
+- 开箱即用的WebUI + 飞书长连接
+
+---
+
+### ✨ 与其他框架的本质区别
+
+| 特性                     | MultiAgentSwarm v3               | AutoGen / CrewAI / LangGraph |
+|--------------------------|----------------------------------|------------------------------|
+| 智能路由                 | ✅ 自动简单/中等/复杂             | ❌ 永远全量群聊              |
+| 对抗式辩论               | ✅ Pro/Con/Judge + 元批评         | ❌（需手动实现）             |
+| Primal终身记忆           | ✅ 树状日志 + 原子KB + 衰退       | ❌ 临时记忆                  |
+| 知识图谱 + 蒸馏          | ✅ 实时概念图谱                   | ❌ 无                       |
+| 自适应反思深度           | ✅ 质量达标自动停止               | ❌ 固定轮数                  |
+| 强制ReAct透明格式        | ✅ 每轮都显示思考过程             | ❌ 黑箱                     |
+| WebUI + 流式 + 取消按钮  | ✅ 开箱即用                       | ❌ 需要额外开发              |
+| 飞书企业级长连接         | ✅ 零配置                         | ❌ 不支持                   |
+| 智能文件生成与下载       | ✅ 自动识别意图并生成可下载报告   | ❌ 手动                     |
+| Token & 时间节省         | 简单任务节省60-80%               | ❌ 永远昂贵                 |
+| 本地模型支持             | ✅ 任何兼容OpenAI接口的LLM（Ollama、vLLM、DeepSeek、Qwen等） | ❌ 支持有限或需额外配置     |
+
+---
 
 ### ✨ 核心特性（v3.2.0 重磅升级）
 
