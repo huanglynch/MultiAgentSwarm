@@ -12,25 +12,24 @@ import tempfile
 import time
 import re
 import unicodedata
-import hmac
-import hashlib
-import base64
 import yaml
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# 飞书 SDK 延迟加载（未安装时不崩溃）
-lark_oapi = None
-CreateMessageRequest = None
-CreateMessageRequestBody = None
-GetMessageResourceRequest = None
+import smtplib
+import imaplib
+import email
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.header import Header, decode_header
+from email.utils import formataddr
 
 # 导入你的 Swarm 系统
 from multi_agent_swarm_v3 import MultiAgentSwarm
@@ -38,20 +37,97 @@ from multi_agent_swarm_v3 import MultiAgentSwarm
 # 全局配置（启动时加载）
 feishu_config = {}
 feishu_client = None
+lark_oapi = None
+CreateMessageRequest = None
+CreateMessageRequestBody = None
+GetMessageResourceRequest = None
+
+
+# ====================== 邮件编码辅助函数 ======================
+# ====================== 邮件编码辅助函数（终极增强版）======================
+def decode_email_payload(part):
+    """增强版邮件内容解码（严格编码检测）"""
+    try:
+        payload = part.get_payload(decode=True)
+        if not payload:
+            return ""
+
+        # 🔥 优先尝试 charset 参数
+        charset = part.get_content_charset()
+        if charset:
+            try:
+                decoded = payload.decode(charset, errors='strict')
+                # 验证是否包含有效字符
+                if decoded and sum(c.isprintable() for c in decoded) / max(len(decoded), 1) > 0.5:
+                    print(f"  ✅ 使用 Content-Type charset={charset} 解码成功")
+                    return decoded
+            except Exception as e:
+                print(f"  ⚠️ charset={charset} 解码失败: {e}")
+
+        # 🔥 智能编码检测（严格验证）
+        encodings = [
+            ('gbk', lambda s: sum(1 for c in s if '\u4e00' <= c <= '\u9fff')),  # 中文字符数
+            ('gb2312', lambda s: sum(1 for c in s if '\u4e00' <= c <= '\u9fff')),
+            ('utf-8', lambda s: sum(1 for c in s if c.isprintable())),
+            ('big5', lambda s: sum(1 for c in s if '\u4e00' <= c <= '\u9fff')),
+            ('iso-8859-1', lambda s: sum(1 for c in s if 32 <= ord(c) <= 126)),
+            ('windows-1252', lambda s: sum(1 for c in s if c.isalpha()))
+        ]
+
+        best_result = None
+        best_score = 0
+
+        for encoding, scorer in encodings:
+            try:
+                decoded = payload.decode(encoding, errors='strict')
+
+                # 计算质量得分
+                if len(decoded) == 0:
+                    continue
+
+                # 1. 可打印字符占比
+                printable_ratio = sum(c.isprintable() for c in decoded) / len(decoded)
+                if printable_ratio < 0.3:
+                    continue
+
+                # 2. 特定语言字符得分
+                special_score = scorer(decoded)
+
+                # 3. 综合得分（特定字符权重更高）
+                total_score = printable_ratio * 100 + special_score * 10
+
+                if total_score > best_score:
+                    best_score = total_score
+                    best_result = (encoding, decoded)
+
+            except Exception:
+                continue
+
+        if best_result:
+            encoding, decoded = best_result
+            print(f"  ✅ 智能检测使用 {encoding} 解码（得分: {best_score:.1f}）")
+            return decoded
+
+        # 🔥 最后尝试：忽略错误的 UTF-8
+        print(f"  ⚠️ 所有严格解码失败，使用 UTF-8 忽略错误")
+        return payload.decode('utf-8', errors='ignore')
+
+    except Exception as e:
+        print(f"  ❌ 解码异常: {e}")
+        return ""
 
 # ====================== FastAPI 应用 ======================
 app = FastAPI(title="MultiAgentSwarm WebUI", version="3.1.0")
 
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory="static"), name="static")
-# ====================== ✨ 输出文件下载支持（用户需求核心） ======================
-# 让 uploads/ 目录下的修改后文件可直接下载（兼容 WebUI + 飞书）
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-print("✅ /uploads 下载服务已启用（修改后的 Excel/报告可直接点击下载）")
+print("✅ /uploads 下载服务已启用")
 
-# ====================== 全局变量（必须在这里定义！） ======================
+# ====================== 全局变量 ======================
 swarm: Optional[MultiAgentSwarm] = None
 conversations: Dict[str, List[Dict]] = {}
+
 
 # ====================== Pydantic 模型 ======================
 class ConfigUpdate(BaseModel):
@@ -83,7 +159,7 @@ def init_swarm():
 # ====================== 工具函数 ======================
 def get_or_create_session(session_id: Optional[str] = None) -> str:
     """获取或创建会话 ID"""
-    global conversations  # ← 新增这一行（关键！）
+    global conversations
     if not session_id:
         session_id = str(uuid.uuid4())
     if session_id not in conversations:
@@ -111,6 +187,34 @@ def update_config(config: ConfigUpdate):
     print(f"✅ 配置已更新: {config.dict()}")
 
 
+def sanitize_filename(original_name: str) -> str:
+    """把中文、空格、特殊符号全部转为安全英文"""
+    name = unicodedata.normalize('NFKD', original_name)
+    name = ''.join(c for c in name if not unicodedata.combining(c))
+    name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+    name = re.sub(r'_{2,}', '_', name)
+    name = name.strip('_')
+    if not name:
+        name = "file"
+    return name.lower()
+
+
+def save_uploaded_content(content: bytes, original_name: str) -> Optional[str]:
+    """保存附件并返回路径"""
+    upload_dir = Path("uploads")
+    upload_dir.mkdir(exist_ok=True)
+    safe_stem = sanitize_filename(Path(original_name).stem)
+    safe_filename = f"{uuid.uuid4().hex[:8]}_{safe_stem}{Path(original_name).suffix.lower()}"
+    file_path = upload_dir / safe_filename
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+        return str(file_path)
+    except Exception as e:
+        print(f"❌ 附件保存失败: {e}")
+        return None
+
+
 # ====================== API 端点 ======================
 @app.on_event("startup")
 async def startup_event():
@@ -121,10 +225,9 @@ async def startup_event():
 
     init_swarm()
 
-    # === 严格按要求：appid 和 app_secret 都非空才启用飞书 ===
+    # 飞书启动
     app_id = feishu_config.get("app_id", "").strip()
     app_secret = feishu_config.get("app_secret", "").strip()
-
     if app_id and app_secret:
         print("🚀 飞书配置有效，正在启动长连接服务...")
         threading.Thread(
@@ -133,12 +236,23 @@ async def startup_event():
             name="Feishu-Long-Connection"
         ).start()
     else:
-        print("ℹ️  飞书功能已关闭（swarm_config.yaml 中 app_id 或 app_secret 未配置）")
+        print("ℹ️  飞书功能已关闭")
+
+    # 邮箱启动
+    email_config = cfg.get("email", {})
+    if email_config.get("imap_user"):
+        threading.Thread(
+            target=start_email_poller,
+            args=(email_config,),
+            daemon=True,
+            name="Email-Poller"
+        ).start()
+        print("🚀 邮件配置有效，正在启动邮箱连接服务...")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """返回主页（重定向到 static/index.html）"""
+    """返回主页"""
     return FileResponse("static/index.html")
 
 
@@ -235,33 +349,12 @@ async def export_session(session_id: str):
             filepath,
             filename=filename,
             media_type="text/markdown",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
 
 
-# ==================== 新增：文件名净化函数 ====================
-def sanitize_filename(original_name: str) -> str:
-    """把中文、空格、特殊符号全部转为安全英文"""
-    # 1. 中文转拼音（可选，更友好）或直接转 ASCII
-    name = unicodedata.normalize('NFKD', original_name)
-    name = ''.join(c for c in name if not unicodedata.combining(c))
-
-    # 2. 只保留安全字符
-    name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)  # 空格、中文等 → _
-    name = re.sub(r'_{2,}', '_', name)  # 多个下划线合并
-    name = name.strip('_')
-
-    # 3. 如果全被清理掉了，就给个默认名
-    if not name:
-        name = "file"
-    return name.lower()  # 统一小写，更美观
-
-
-# ==================== 修改 upload_file 函数 ====================
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
@@ -272,7 +365,6 @@ async def upload_file(file: UploadFile = File(...)):
         if file_ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(status_code=400, detail=f"不支持的文件类型: {file_ext}")
 
-        # === 关键修改：自动净化文件名 ===
         stem = Path(file.filename).stem
         safe_stem = sanitize_filename(stem)
         safe_filename = f"{uuid.uuid4().hex[:8]}_{safe_stem}{file_ext}"
@@ -290,7 +382,7 @@ async def upload_file(file: UploadFile = File(...)):
 
         return {
             "status": "ok",
-            "filename": safe_filename,  # 返回净化后的名字
+            "filename": safe_filename,
             "path": str(file_path),
             "type": file_ext,
             "size": len(content)
@@ -299,16 +391,14 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
 
 
-# ====================== WebSocket 端点（增强稳定性）======================
+# ====================== WebSocket 端点 ======================
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket 端点（支持真实流式输出 + 心跳保活 + 取消功能）"""
-    global conversations  # ← 新增这一行（关键！）
+    global conversations
     await websocket.accept()
-    import time
     start_time = time.time()
 
-    # ✅ 心跳任务（每30秒发送一次 ping）
     async def heartbeat():
         try:
             while True:
@@ -324,7 +414,6 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
-            # ✅ 新增：处理取消请求
             if data.get("type") == "cancel":
                 if swarm:
                     swarm.cancel_current_task()
@@ -332,14 +421,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "log",
                         "content": "🛑 正在尝试取消任务..."
                     })
-                    await websocket.send_json({
-                        "type": "stream",
-                        "agent": "System",
-                        "content": "\n\n⏸️ **正在取消任务，请稍候...**\n\n"
-                    })
                 continue
 
-            # 🔥 忽略心跳 pong
             if data.get("type") in ("pong", "ping"):
                 continue
 
@@ -351,10 +434,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
                 continue
 
-            # ====================== 【关键修复：每条新消息都重置取消标志】 ======================
             if swarm:
                 swarm._reset_cancel_flag()
-            # ==================================================================================
 
             session_id = get_or_create_session(data.get("session_id"))
             use_memory = data.get("use_memory", False)
@@ -373,47 +454,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 "session_id": session_id
             })
 
-            # 构建历史上下文
-            history_context = ""
-            history_lines = []
-            if len(conversations[session_id]) > 1:
-                recent_messages = conversations[session_id][:-1]
-                if len(recent_messages) > 10:
-                    recent_messages = recent_messages[-10:]
-                MAX_HISTORY_TOKENS = 2000
-                accumulated_text = ""
-                selected_messages = []
-                for msg in reversed(recent_messages):
-                    candidate = f"{msg['content']}\n\n{accumulated_text}"
-                    estimated_tokens = len(candidate) * 0.75
-                    if estimated_tokens > MAX_HISTORY_TOKENS:
-                        break
-                    accumulated_text = candidate
-                    selected_messages.insert(0, msg)
-                if selected_messages:
-                    for msg in selected_messages:
-                        if msg["role"] == "system":
-                            history_lines.append(msg["content"])
-                        else:
-                            role_name = "User" if msg["role"] == "user" else "Assistant"
-                            content = msg["content"][:500]
-                            if len(msg["content"]) > 500:
-                                content += "..."
-                            history_lines.append(f"{role_name}: {content}")
-                    history_context = "\n\n".join(history_lines)
+            # 构建历史上下文（简化版，可根据需要扩展）
+            full_message = message
 
-            if history_context:
-                full_message = f"""=== 📚 对话历史（最近 {len(history_lines)} 轮）===
-            {history_context}
-            === 💬 当前问题 ===
-            User: {message}"""
-            else:
-                full_message = message
-
-            # ====================== 【附件处理 - 已修正，独立处理】 ======================
-            image_paths = []  # ← 必须在这里初始化（关键修复）
+            # ============ 🔥 修复：补全附件处理代码 ============
+            image_paths = []
             file_contents = []
-            if "📎 附件:" in message:  # 用原始 message 判断
+            if "📎 附件:" in message:
                 try:
                     file_paths = [
                         line.strip("- ").strip()
@@ -429,31 +476,31 @@ async def websocket_endpoint(websocket: WebSocket):
                         for path in file_paths:
                             try:
                                 path = path.strip()
-                                # === 图片走多模态通道 ===
+                                # 图片走多模态通道
                                 if path.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
                                     if os.path.exists(path):
                                         image_paths.append(path)
                                         file_contents.append(f"### 🖼️ {Path(path).name} (已作为多模态视觉输入)")
                                         await websocket.send_json({
                                             "type": "log",
-                                            "content": f"📸 图片已加载为多模态输入: {Path(path).name}"
+                                            "content": f"📸 图片已加载: {Path(path).name}"
                                         })
                                     continue
 
-                                # PDF / TXT / MD 处理（保持不变）
+                                # PDF / TXT / MD 处理
                                 if path.endswith('.pdf'):
                                     result = swarm.tool_registry['pdf_reader']['func'](file_path=path)
                                     if result.get('success'):
                                         content = result.get('content', '')[:MAX_PREVIEW_LENGTH]
                                         file_contents.append(
-                                            f"### 📄 {Path(path).name} (PDF)\n【系统指令：以下是附件完整解析内容，请直接基于此内容分析】\n内容:\n{content}"
+                                            f"### 📄 {Path(path).name} (PDF)\n内容:\n{content}"
                                         )
                                 elif path.endswith(('.txt', '.md')):
                                     result = swarm.tool_registry['read_file']['func'](file_path=path)
                                     if result.get('success'):
                                         content = result.get('content', '')[:MAX_PREVIEW_LENGTH]
                                         file_contents.append(
-                                            f"### 📄 {Path(path).name}\n【系统指令：以下是附件完整解析内容，请直接基于此内容分析】\n内容:\n{content}"
+                                            f"### 📄 {Path(path).name}\n内容:\n{content}"
                                         )
                             except Exception as e:
                                 file_contents.append(f"### ❌ {Path(path).name} 处理失败: {str(e)}")
@@ -463,13 +510,13 @@ async def websocket_endpoint(websocket: WebSocket):
                             full_message = full_message + file_section
                             await websocket.send_json({
                                 "type": "log",
-                                "content": f"✅ 附件解析完成（{len(image_paths)} 张图片 + {len(file_contents) - len(image_paths)} 个文本文件）"
+                                "content": f"✅ 附件解析完成"
                             })
                 except Exception as e:
                     print(f"⚠️ 附件解析失败: {e}")
                     await websocket.send_json({
                         "type": "log",
-                        "content": f"⚠️ 附件解析失败: {str(e)[:50]}"
+                        "content": f"⚠️ 附件解析失败"
                     })
 
             # 创建异步队列
@@ -477,7 +524,6 @@ async def websocket_endpoint(websocket: WebSocket):
             log_queue = asyncio.Queue()
 
             async def stream_sender():
-                """持续发送流式数据到前端"""
                 while True:
                     try:
                         data = await asyncio.wait_for(stream_queue.get(), timeout=0.1)
@@ -492,7 +538,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         break
 
             async def log_sender():
-                """持续发送日志到前端"""
                 while True:
                     try:
                         log_msg = await asyncio.wait_for(log_queue.get(), timeout=0.1)
@@ -517,7 +562,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 loop = asyncio.get_event_loop()
 
                 def stream_callback(agent_name: str, content: str):
-                    """流式内容回调"""
                     asyncio.run_coroutine_threadsafe(
                         stream_queue.put({
                             "type": "stream",
@@ -528,27 +572,26 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
 
                 def log_callback(message: str):
-                    """日志回调"""
                     asyncio.run_coroutine_threadsafe(
                         log_queue.put(message),
                         loop
                     )
 
-                # 新增：
                 if swarm and swarm._check_cancellation():
                     await websocket.send_json({
                         "type": "error",
                         "content": "⏸️ 任务已被用户取消"
                     })
                     await websocket.send_json({"type": "end"})
-                    return  # ← 直接返回，不执行 solve
+                    return
+
                 answer = await loop.run_in_executor(
                     None,
                     lambda: swarm.solve(
                         full_message,
                         use_memory,
                         memory_key,
-                        image_paths,  # ← 关键修改（原来是 None）
+                        image_paths,
                         force_complexity,
                         stream_callback=stream_callback,
                         log_callback=log_callback
@@ -573,9 +616,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "type": "log",
                         "content": f"⏱️ 总耗时: {elapsed:.2f}秒"
                     })
-                    await websocket.send_json({
-                        "type": "end"
-                    })
+                    await websocket.send_json({"type": "end"})
 
                 start_time = time.time()
 
@@ -609,11 +650,9 @@ async def websocket_endpoint(websocket: WebSocket):
                             "type": "error",
                             "content": error_msg
                         })
-                        await websocket.send_json({
-                            "type": "end"
-                        })
+                        await websocket.send_json({"type": "end"})
                 except Exception as send_error:
-                    print(f"⚠️ WebSocket 已关闭，无法发送错误消息: {send_error}")
+                    print(f"⚠️ WebSocket 已关闭: {send_error}")
                     break
 
                 conversations[session_id].append({
@@ -624,7 +663,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         print(f"🔌 WebSocket 断开连接")
-        # ✅ 连接断开时尝试取消任务
         if swarm:
             swarm.cancel_current_task()
     except Exception as e:
@@ -632,7 +670,6 @@ async def websocket_endpoint(websocket: WebSocket):
         import traceback
         traceback.print_exc()
     finally:
-        # ✅ 清理心跳任务
         heartbeat_task.cancel()
         try:
             await heartbeat_task
@@ -640,10 +677,9 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
 
 
-# ====================== ✨ 飞书官方 SDK 长连接模式 ✨ ======================
+# ====================== 飞书长连接 ======================
 def start_feishu_long_connection():
-    """启动飞书长连接（仅在配置有效时被调用）"""
-    # nest_asyncio 保护
+    """启动飞书长连接"""
     try:
         import nest_asyncio
         nest_asyncio.apply()
@@ -652,13 +688,12 @@ def start_feishu_long_connection():
 
     global feishu_client, lark_oapi, CreateMessageRequest, CreateMessageRequestBody, GetMessageResourceRequest
 
-    # 2. SDK 导入检查（使用正确类名）
     try:
         import lark_oapi as lark_module
         from lark_oapi.api.im.v1 import (
             CreateMessageRequest as Req,
             CreateMessageRequestBody as ReqBody,
-            GetMessageResourceRequest as ResourceReq   # ← 关键修复：正确类名
+            GetMessageResourceRequest as ResourceReq
         )
         lark_oapi = lark_module
         CreateMessageRequest = Req
@@ -666,14 +701,12 @@ def start_feishu_long_connection():
         GetMessageResourceRequest = ResourceReq
         print("✅ lark-oapi 导入成功")
     except Exception as e:
-        print(f"❌ lark-oapi 导入失败: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ lark-oapi 导入失败: {e}")
         return
 
-    # 3. 启动长连接
     try:
-        feishu_client = lark_oapi.Client.builder().app_id(feishu_config.get("app_id")).app_secret(feishu_config.get("app_secret")).build()
+        feishu_client = lark_oapi.Client.builder().app_id(feishu_config.get("app_id")).app_secret(
+            feishu_config.get("app_secret")).build()
 
         def handle_message(data: lark_oapi.im.v1.P2ImMessageReceiveV1):
             try:
@@ -684,57 +717,43 @@ def start_feishu_long_connection():
                 if not message_id or not chat_id:
                     return
 
-                # ====================== 【新增】飞书收到消息后立即在原消息下方打 👍 ======================
-                # 目的：实现图片中「Nanobot-MiniPC 👍」效果，非回复消息，立即反馈
+                # 添加👍反应
                 try:
                     reaction_req = lark_oapi.BaseRequest.builder() \
                         .http_method(lark_oapi.HttpMethod.POST) \
                         .uri(f"/open-apis/im/v1/messages/{message_id}/reactions") \
                         .token_types({lark_oapi.AccessTokenType.TENANT}) \
-                        .body({
-                        "reaction_type": {
-                            "emoji_type": "THUMBSUP"  # 👍 官方正确代码（THUMBSUP = 点赞）
-                        }
-                    }) \
+                        .body({"reaction_type": {"emoji_type": "THUMBSUP"}}) \
                         .build()
 
                     reaction_resp = feishu_client.request(reaction_req)
                     if reaction_resp.success():
-                        print(f"✅ 👍 已为消息 {message_id[:12]}... 添加收到确认（原消息下方可见）")
-                    else:
-                        print(f"⚠️ 👍 添加失败（不影响处理）: {reaction_resp.msg}")
+                        print(f"✅ 👍 已添加")
                 except Exception as e:
-                    print(f"⚠️ 添加 👍 反应异常（已隔离，不阻塞主流程）: {str(e)[:80]}")
-                # ====================== 新增结束 ======================
+                    print(f"⚠️ 👍 添加失败: {str(e)[:80]}")
 
                 content_str = msg.content or "{}"
                 content_json = json.loads(content_str)
-
                 full_message = ""
-                content = ""
 
-                # ==================== 处理附件（已修复 field validation） ====================
+                # 处理附件
                 if msg.message_type in ("file", "image"):
                     file_key = None
                     original_name = "unknown_file"
-                    file_type = "file"  # 默认
+                    file_type = msg.message_type if msg.message_type in ("image", "file") else "file"
 
                     if msg.message_type == "image":
                         file_key = content_json.get("image_key")
                         original_name = f"image_{int(time.time())}.jpg"
-                        file_type = "image"
                     else:
                         file_key = content_json.get("file_key")
                         original_name = content_json.get("file_name", "file")
-                        # file_type = "file"
-                        file_type = msg.message_type if msg.message_type in ("image", "file") else "file"
 
                     if not file_key:
                         return
 
-                    print(f"📥 Feishu 收到附件: {original_name} (type={file_type})")
+                    print(f"📥 Feishu 收到附件: {original_name}")
 
-                    # === 关键修复：必须传入 type 参数 ===
                     request = GetMessageResourceRequest.builder() \
                         .message_id(message_id) \
                         .file_key(file_key) \
@@ -745,21 +764,8 @@ def start_feishu_long_connection():
 
                     if not response.success():
                         print(f"❌ 下载附件失败: {response.msg}")
-                        # 下载失败也友好回复用户
-                        reminder = CreateMessageRequest.builder() \
-                            .receive_id_type("chat_id") \
-                            .request_body(
-                            CreateMessageRequestBody.builder()
-                            .receive_id(chat_id)
-                            .msg_type("text")
-                            .content(
-                                json.dumps({"text": f"⚠️ 已收到您的附件 {original_name}，但下载失败，请尝试重新发送"}))
-                            .build()
-                        ).build()
-                        feishu_client.im.v1.message.create(reminder)
                         return
 
-                    # 保存文件（复用你的净化函数）
                     safe_stem = sanitize_filename(Path(original_name).stem)
                     safe_filename = f"{uuid.uuid4().hex[:8]}_{safe_stem}{Path(original_name).suffix.lower()}"
                     upload_dir = Path("uploads")
@@ -769,22 +775,20 @@ def start_feishu_long_connection():
                     with open(file_path, "wb") as f:
                         f.write(response.raw.content)
 
-                    print(f"✅ 附件已保存: {file_path} ({len(response.raw.content) / 1024:.1f} KB)")
+                    print(f"✅ 附件已保存: {file_path}")
                     full_message = f"[来自飞书] 用户发送了附件\n\n📎 附件:\n- {file_path}"
 
-                    # 成功提醒
                     reminder = CreateMessageRequest.builder() \
                         .receive_id_type("chat_id") \
                         .request_body(
                         CreateMessageRequestBody.builder()
                         .receive_id(chat_id)
                         .msg_type("text")
-                        .content(json.dumps({"text": f"🤖 已成功收到附件《{original_name}》，正在分析处理中..."}))
+                        .content(json.dumps({"text": f"🤖 已收到附件《{original_name}》，正在处理..."}))
                         .build()
                     ).build()
                     feishu_client.im.v1.message.create(reminder)
 
-                # ==================== 处理纯文本 ====================
                 elif msg.message_type == "text":
                     content = content_json.get("text", "").strip()
                     if not content:
@@ -793,7 +797,7 @@ def start_feishu_long_connection():
                 else:
                     return
 
-                # ==================== 是否需要回复 ====================
+                # 判断是否需要回复
                 should_reply = msg.chat_type == "p2p"
                 if msg.chat_type == "group" and hasattr(event, "mentions") and event.mentions:
                     for m in event.mentions:
@@ -803,12 +807,13 @@ def start_feishu_long_connection():
                                 content = re.sub(r'@\S+\s*', '', content).strip()
                                 full_message = f"[来自飞书] {content}"
                             break
+
                 if not should_reply:
                     return
 
-                print(f"📥 Feishu 长连接收到消息: {full_message[:70]}...")
+                print(f"📥 Feishu 收到消息: {full_message[:70]}...")
 
-                # Swarm 处理（现在附件路径会正确传入）
+                # ✅ 调用 Swarm
                 answer = swarm.solve(
                     full_message,
                     use_memory=True,
@@ -827,7 +832,7 @@ def start_feishu_long_connection():
 
                 response = feishu_client.im.v1.message.create(request)
                 if response.success():
-                    print("✅ 已自动回复处理结果")
+                    print("✅ 已回复")
                 else:
                     print(f"⚠️ 回复失败: {response.msg}")
 
@@ -836,7 +841,6 @@ def start_feishu_long_connection():
                 import traceback
                 traceback.print_exc()
 
-        # 注册并启动
         event_handler = lark_oapi.EventDispatcherHandler.builder("", "") \
             .register_p2_im_message_receive_v1(handle_message) \
             .build()
@@ -848,17 +852,352 @@ def start_feishu_long_connection():
             log_level=lark_oapi.LogLevel.INFO
         )
 
-        print("🚀 飞书官方长连接客户端已启动（WebSocket 已建立）")
+        print("🚀 飞书长连接已启动")
         cli.start()
 
     except Exception as e:
         print(f"⚠️ 飞书长连接启动失败: {e}")
 
 
-async def send_log(msg: str):
-    """实时推送到 WebUI 日志区"""
-    print(f"🪝 {msg}")
-    # 如果需要推送到前端，可在此扩展
+# ====================== 邮箱轮询（完整版）======================
+def start_email_poller(config: dict):
+    """邮箱轮询主函数"""
+    interval = config.get("check_interval", 60)
+
+    print(f"📧 Email Poller 已启动（间隔 {interval} 秒）")
+    print(f"🎯 关键词: {config.get('email_keywords', [])}")
+
+    def fetch_recent_unseen():
+        """获取最近24小时未读邮件（终极增强版）"""
+        try:
+            mail = imaplib.IMAP4_SSL(config["imap_server"], 993)
+
+            # IMAP ID
+            try:
+                tag = mail._new_tag()
+                mail.send(f'{tag} ID ("name" "MultiAgentSwarm" "version" "3.1" "vendor" "xAI")\r\n'.encode())
+                while True:
+                    line = mail.readline().decode('utf-8', errors='ignore').strip()
+                    if line.startswith(tag.decode()):
+                        if 'OK' in line:
+                            print("✅ IMAP ID 已发送")
+                        break
+                    elif line.startswith('*'):
+                        continue
+                    else:
+                        break
+            except Exception as e:
+                print(f"⚠️ IMAP ID 失败: {e}")
+
+            mail.login(config["imap_user"], config["imap_pass"])
+
+            status, message_count = mail.select('INBOX')
+            if status != 'OK':
+                mail.logout()
+                return []
+
+            since_date = (datetime.now() - timedelta(days=1)).strftime("%d-%b-%Y")
+            search_criteria = f'(UNSEEN SINCE {since_date})'
+
+            status, messages = mail.search(None, search_criteria)
+            if status != 'OK':
+                mail.close()
+                mail.logout()
+                return []
+
+            mail_ids = messages[0].split()
+            if not mail_ids:
+                mail.close()
+                mail.logout()
+                return []
+
+            print(f"📬 找到 {len(mail_ids)} 封未读邮件")
+
+            results = []
+            keywords = config.get('email_keywords', [])
+
+            for mail_id in mail_ids:
+                try:
+                    status, msg_data = mail.fetch(mail_id, '(RFC822)')
+                    if status != 'OK':
+                        continue
+
+                    raw_email = msg_data[0][1]
+                    msg = email.message_from_bytes(raw_email)
+
+                    # 解析主题
+                    subject = ''
+                    subject_header = msg.get('Subject', '')
+                    for part, encoding in decode_header(subject_header):
+                        if isinstance(part, bytes):
+                            subject += part.decode(encoding or 'utf-8', errors='ignore')
+                        else:
+                            subject += str(part)
+
+                    from_header = msg.get('From', '')
+
+                    # 关键词过滤
+                    if keywords and not any(kw in subject or kw in from_header for kw in keywords):
+                        print(f"⏭️  跳过: {subject[:30]}")
+                        continue
+
+                    # ============ 🔥 终极增强：正文提取 ============
+                    body = ''
+                    html_body = ''
+                    attachments = []
+
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            content_type = part.get_content_type()
+                            content_disposition = str(part.get("Content-Disposition", ""))
+
+                            # ✅ 提取纯文本（使用增强解码）
+                            if content_type == "text/plain" and "attachment" not in content_disposition:
+                                decoded = decode_email_payload(part)
+                                if decoded:
+                                    body += decoded
+
+                            # ✅ 提取 HTML（使用增强解码）
+                            elif content_type == "text/html" and "attachment" not in content_disposition:
+                                decoded = decode_email_payload(part)
+                                if decoded:
+                                    html_body += decoded
+
+                            # 提取附件
+                            elif "attachment" in content_disposition:
+                                filename = part.get_filename()
+                                if filename:
+                                    decoded_parts = decode_header(filename)
+                                    filename = ''.join([
+                                        p.decode(enc or 'utf-8', errors='ignore') if isinstance(p, bytes) else str(p)
+                                        for p, enc in decoded_parts
+                                    ])
+                                    payload = part.get_payload(decode=True)
+                                    if payload:
+                                        path = save_uploaded_content(payload, filename)
+                                        if path:
+                                            attachments.append(path)
+                    else:
+                        # ✅ 单部分邮件（使用增强解码）
+                        content_type = msg.get_content_type()
+                        if content_type == "text/html":
+                            html_body = decode_email_payload(msg)
+                        else:
+                            body = decode_email_payload(msg)
+
+                    # ✅ 如果纯文本为空，使用 HTML 转文本
+                    if not body.strip() or len(body) < 10:
+                        if html_body:
+                            print(f"  ⚠️  纯文本缺失，转换 HTML")
+
+                            import html
+                            html_body = html.unescape(html_body)
+
+                            # 移除 <script> 和 <style>
+                            html_body = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html_body,
+                                               flags=re.DOTALL | re.IGNORECASE)
+
+                            # 移除所有 HTML 标签
+                            body = re.sub(r'<[^>]+>', '', html_body)
+
+                            # 清理多余空白
+                            body = re.sub(r'\s+', ' ', body).strip()
+
+                            # 智能判断是否为有效内容
+                            if body:
+                                visible_chars = sum(1 for c in body if c.isprintable() and not c.isspace())
+
+                                if visible_chars < 5:
+                                    body = "[邮件正文无法解析 - 可能是纯图片或格式化邮件]"
+                                    print(f"  ⚠️  正文无效（可见字符: {visible_chars}）")
+                                else:
+                                    meaningful_chars = sum(1 for c in body if c.isalnum() or c in '，。！？、；：""''（）《》【】…—')
+                                    if meaningful_chars < 3:
+                                        body = "[邮件正文无法解析 - 可能是纯图片或格式化邮件]"
+                                        print(f"  ⚠️  正文无效（有意义字符: {meaningful_chars}）")
+                                    else:
+                                        print(f"  ✅ HTML 转文本成功（{len(body)} 字符，{meaningful_chars} 有意义字符）")
+
+                    # 标记已读
+                    mail.store(mail_id, '+FLAGS', '\\Seen')
+
+                    results.append({
+                        'subject': subject,
+                        'from': from_header,
+                        'date': msg.get('Date', ''),
+                        'body': body.strip() if body.strip() else "[空邮件]",
+                        'attachments': attachments
+                    })
+
+                    print(f"✅ 获取: {subject[:50]}")
+                    print(f"   正文长度: {len(body)} 字符")
+
+                except Exception as e:
+                    print(f"⚠️ 处理失败: {e}")
+                    continue
+
+            mail.close()
+            mail.logout()
+            return results
+
+        except Exception as e:
+            print(f"❌ IMAP 失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def send_reply(to: str, subject: str, body: str, original_date: str = "", attachments: List[str] = None):
+        """发送回复（支持附件）"""
+        try:
+            from email.mime.base import MIMEBase
+            from email import encoders
+
+            msg = MIMEMultipart()
+            msg['From'] = formataddr((
+                Header("MultiAgentSwarm AI", 'utf-8').encode(),
+                config['imap_user']
+            ))
+            msg['To'] = to
+            msg['Subject'] = Header(subject, 'utf-8')
+
+            full_body = f"""您好！
+
+    以下是 AI 助手的回复：
+
+    {body}
+
+    ---
+    本邮件由 MultiAgentSwarm AI 系统自动生成
+    原始邮件时间: {original_date}
+    """
+
+            msg.attach(MIMEText(full_body, 'plain', 'utf-8'))
+
+            if attachments:
+                for file_path in attachments:
+                    try:
+                        if not os.path.exists(file_path):
+                            continue
+
+                        with open(file_path, 'rb') as f:
+                            part = MIMEBase('application', 'octet-stream')
+                            part.set_payload(f.read())
+                            encoders.encode_base64(part)
+
+                            filename = os.path.basename(file_path)
+                            part.add_header(
+                                'Content-Disposition',
+                                f'attachment; filename="{Header(filename, "utf-8").encode()}"'
+                            )
+                            msg.attach(part)
+                            print(f"  📎 已附加: {filename}")
+
+                    except Exception as e:
+                        print(f"  ⚠️ 附件失败 {file_path}: {e}")
+
+            port = config.get("smtp_port", 465)
+            if port == 465:
+                server = smtplib.SMTP_SSL(config["smtp_server"], port)
+            else:
+                server = smtplib.SMTP(config["smtp_server"], port)
+                server.starttls()
+
+            server.login(config["imap_user"], config["imap_pass"])
+            server.send_message(msg)
+            server.quit()
+
+            print(f"✅ 回复已发送至: {to}")
+            return True
+
+        except Exception as e:
+            print(f"❌ 发送失败: {e}")
+            return False
+
+    # 主循环
+    while True:
+        try:
+            print(f"\n{'=' * 60}")
+            print(f"🔄 检查邮件 ({datetime.now().strftime('%H:%M:%S')})")
+            print(f"{'=' * 60}\n")
+
+            emails = fetch_recent_unseen()
+
+            if not emails:
+                print("📭 无新邮件")
+            else:
+                print(f"📬 处理 {len(emails)} 封邮件\n")
+
+                for idx, email_data in enumerate(emails, 1):
+                    try:
+                        print(f"{'─' * 60}")
+                        print(f"📧 [{idx}/{len(emails)}] {email_data['subject'][:40]}")
+                        print(f"👤 {email_data['from']}")
+
+                        question = f"[邮件主题]\n{email_data['subject']}\n\n[邮件内容]\n{email_data['body']}"
+
+                        if email_data['attachments']:
+                            question += "\n\n[附件]\n" + "\n".join(f"- {a}" for a in email_data['attachments'])
+                            print(f"📎 {len(email_data['attachments'])} 个附件")
+
+                        print("🤖 AI 处理中...")
+
+                        # ✅ 调用 Swarm
+                        if swarm:
+                            answer = swarm.solve(
+                                question,
+                                use_memory=True,
+                                memory_key="email_auto"
+                            )
+                        else:
+                            answer = "❌ Swarm 未初始化"
+
+                        print(f"✅ AI 完成（{len(answer)} 字符）")
+
+                        # 提取发件人邮箱
+                        from_email = re.findall(r'[\w\.-]+@[\w\.-]+', email_data['from'])
+
+                        if from_email:
+                            # 🔥 检查 AI 回复中是否提到需要发送附件
+                            attachments_to_send = []
+
+                            # 如果 AI 生成了新文件（如报告、图表等），将路径添加到这里
+                            # 例如：从 answer 中提取 /uploads/xxx.pdf 这样的路径
+                            upload_pattern = r'uploads/[\w\-\.]+\.\w+'
+                            found_files = re.findall(upload_pattern, answer)
+
+                            seen = set()
+                            MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024  # 10MB
+
+                            for file_path in found_files:
+                                if os.path.exists(file_path):
+                                    file_size = os.path.getsize(file_path)
+                                    if file_size > MAX_ATTACHMENT_SIZE:
+                                        print(f"  ⚠️ 附件过大，跳过: {file_path} ({file_size / 1024 / 1024:.1f}MB)")
+                                        continue
+                                    if file_path not in seen:
+                                        attachments_to_send.append(file_path)
+                                        seen.add(file_path)
+
+                            send_reply(
+                                to=from_email[0],
+                                subject=f"Re: {email_data['subject']}",
+                                body=answer,
+                                original_date=email_data['date'],
+                                attachments=attachments_to_send  # 🔥 新增参数
+                            )
+
+                        if idx < len(emails):
+                            time.sleep(2)
+
+                    except Exception as e:
+                        print(f"❌ 处理失败: {e}")
+                        continue
+
+        except Exception as e:
+            print(f"⚠️ 轮询异常: {e}")
+
+        time.sleep(interval)
+
 
 # ====================== 启动服务器 ======================
 if __name__ == "__main__":
