@@ -4,10 +4,22 @@
 **The only swarm that lets you literally watch every agent think.**
 
 <p align="center">
+  <strong>
+    <a href="#english-version">🇬🇧 English Version</a>
+      |  
+    <a href="#chinese-version">🇨🇳 中文版</a>
+  </strong>
+</p>
+
+<p align="center">
   <img src="images/architecture-diagram.png" alt="MultiAgentSwarm v3.2.0 Architecture" width="95%" style="border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
 </p>
 
 ---
+
+## English Version <a id="english-version"></a>
+
+**MultiAgentSwarm v3.2.0** is not just multiple LLMs chatting — it is a **fully visible, self-adaptive ReAct Digital Team** that perfectly matches the classic ReAct architecture diagram while adding group intelligence, dynamic planning, and production-ready WebUI + Feishu integration.
 
 ### Why This Project Exists (First-Principles Thinking)
 
@@ -19,9 +31,7 @@ We started from scratch with two axioms:
 1. **Intelligence ≠ more agents.** Intelligence = knowing *when* to use agents, *how deep* to debate, and *what to remember*.
 2. **Quality without waste.** Every token spent must be justified.
 
-**Result: MultiAgentSwarm v3.2.0** — the only framework that is **100% aligned with the classic ReAct architecture diagram** while delivering group intelligence, dynamic planning, lifelong memory, and production-ready WebUI + Feishu integration.
-
----
+**Result:** The only framework that is **100% aligned with the classic ReAct architecture diagram** while delivering group intelligence, dynamic planning, lifelong memory, and production-ready WebUI + Feishu integration.
 
 ### ✨ Core Features (v3.2.0 Major Upgrades)
 
@@ -74,8 +84,6 @@ We started from scratch with two axioms:
 - **25+ Skills out of the box** (web search, PDF parser, file I/O, Python sandbox, image analysis, etc.)  
 - **Drop-and-play Skill system**: Drop any `.py` tool or `.md` knowledge file into `/skills/` — instantly loaded
 
----
-
 ### 📊 Performance Comparison
 
 | Metric                  | v2.9.2     | v3.1.0      | v3.2.0 (Now)               | Improvement      |
@@ -86,8 +94,6 @@ We started from scratch with two axioms:
 | Plan drift (5+ rounds)  | Medium     | Low         | **Almost 0**               | Completely solved |
 | Token usage (complex)   | Baseline   | -40~60%     | **-45~65%**                | Further savings |
 | File handling           | None       | Basic       | **Chinese name cleanup + download** | Production-ready |
-
----
 
 ### 🚀 Quick Start (Under 60 Seconds)
 
@@ -115,8 +121,6 @@ python webui.py
 python multi_agent_swarm_v3.py
 ```
 
----
-
 ### 📋 Flexible Configuration (One YAML to Rule Them All)
 
 ```yaml
@@ -139,8 +143,6 @@ intelligent_routing:
 
 All features are hot-reloadable via WebUI `/api/config`.
 
----
-
 ### 🛠️ What You Can Do Today
 
 - Beautiful WebUI with real-time streaming + cancel button + expandable ReAct panel
@@ -151,8 +153,6 @@ All features are hot-reloadable via WebUI `/api/config`.
 - **25+ Skills** + instant skill extension via `/skills/`
 - Persistent PrimalMemory + Vector DB across restarts
 - Full local model support (Ollama/vLLM or any OpenAI-compatible endpoint)
-
----
 
 ### 📁 Project Structure
 
@@ -168,8 +168,6 @@ MultiAgentSwarm/
 └── memory/                     # PrimalMemory + Vector DB + Knowledge Graph
 ```
 
----
-
 ### Installation & Requirements
 
 ```bash
@@ -183,7 +181,7 @@ No GPU required. Model caching automatic. OpenSandbox optional (auto fallback).
 
 ---
 
-## 🌟 中文版 | Chinese Version
+## 中文版 <a id="chinese-version"></a>
 
 **MultiAgentSwarm WebUI v3.2.0（ReAct 可视化版）**  
 **一个真正“看得见思考”的自适应数字团队**
@@ -239,8 +237,6 @@ No GPU required. Model caching automatic. OpenSandbox optional (auto fallback).
 - 任何兼容 OpenAI 接口的 LLM（Ollama、vLLM、DeepSeek、Qwen 等）  
 - **25+ Skill** 开箱即用 + **极易扩展**：把 `.py` 或 `.md` 扔进 `/skills/` 即可立即加载
 
----
-
 ### 📊 性能对比
 
 | 指标                  | v2.9.2     | v3.1.0      | v3.2.0（现在）          | 提升幅度       |
@@ -251,8 +247,6 @@ No GPU required. Model caching automatic. OpenSandbox optional (auto fallback).
 | 规划漂移（5+轮）      | 中         | 低          | **几乎为 0**            | 彻底解决      |
 | Token 消耗            | 基准       | -40~60%     | **-45~65%**             | 进一步节省    |
 | 文件处理              | 无         | 基础        | **中文名净化 + 下载支持** | 生产级可用    |
-
----
 
 ### 🚀 快速开始
 
