@@ -351,6 +351,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
                 continue
 
+            # ====================== 【关键修复：每条新消息都重置取消标志】 ======================
+            if swarm:
+                swarm._reset_cancel_flag()
+            # ==================================================================================
+
             session_id = get_or_create_session(data.get("session_id"))
             use_memory = data.get("use_memory", False)
             memory_key = data.get("memory_key", "default")
@@ -529,6 +534,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         loop
                     )
 
+                # 新增：
+                if swarm and swarm._check_cancellation():
+                    await websocket.send_json({
+                        "type": "error",
+                        "content": "⏸️ 任务已被用户取消"
+                    })
+                    await websocket.send_json({"type": "end"})
+                    return  # ← 直接返回，不执行 solve
                 answer = await loop.run_in_executor(
                     None,
                     lambda: swarm.solve(
@@ -565,6 +578,14 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
 
                 start_time = time.time()
+
+            except asyncio.CancelledError:
+                await websocket.send_json({
+                    "type": "error",
+                    "content": "⏸️ 任务已被用户取消"
+                })
+                await websocket.send_json({"type": "end"})
+                return
 
             except Exception as e:
                 print(f"❌ Swarm 执行失败: {e}")
@@ -705,7 +726,8 @@ def start_feishu_long_connection():
                     else:
                         file_key = content_json.get("file_key")
                         original_name = content_json.get("file_name", "file")
-                        file_type = "file"
+                        # file_type = "file"
+                        file_type = msg.message_type if msg.message_type in ("image", "file") else "file"
 
                     if not file_key:
                         return
