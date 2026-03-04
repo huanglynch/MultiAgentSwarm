@@ -716,7 +716,8 @@ class Agent:
             "Thinking: 用户问 Transformer 注意力机制，我需要先回忆原理再查最新进展。\n"
             "Action: web_search\n"
             "Action Input: {\"query\": \"Transformer attention mechanism latest\"}\n\n"
-            "用户和前端会直接看到这个思考过程，提升透明度和调试能力。"
+            "用户和前端会直接看到这个思考过程，提升透明度和调试能力。\n"
+            "必须在 Thinking 开头显式写「Phase X: ...」引用Master Plan当前阶段，否则视为违规。\n\n"
             # =============================================================================
         )
 
@@ -1650,6 +1651,38 @@ class MultiAgentSwarm:
                 log_callback("📋 Master Plan 已生成并注入")
             tracker.checkpoint("2.5️⃣ Master Plan 生成")
 
+        # 🔥【新增】Plan Validation Pass —— 让 Benjamin 专门审 Plan（极简 12 行）
+        # 🔥【Plan Validation Pass】—— Benjamin 审查（通用版 v2，已极致优化）
+        if plan and self.enable_adversarial_debate:
+            if self._check_cancellation():
+                return "⏸️ 任务在 Plan 验证前被取消"
+
+            validate_prompt = (
+                "你现在是严格的 Plan Reviewer（Benjamin 模式）。\n"
+                "请对以下 Master Plan 进行一次快速、客观审查：\n"
+                "1. 阶段划分是否清晰、可执行、逻辑完整？\n"
+                "2. 责任分配与资源匹配是否合理？\n"
+                "3. 是否遗漏关键风险、依赖或检查点？\n"
+                "4. 给出最终评分（0-100）和最多 3 条最重要改进建议。\n\n"
+                f"原 Plan：\n{plan}\n\n"
+                "请直接回复改进后的完整 Plan（必须保持原有编号格式和结构）。"
+            )
+
+            improved_plan = self.agents[2].generate_response(  # Benjamin
+                [{"speaker": "System", "content": validate_prompt}],
+                0,
+                force_non_stream=True
+            )
+
+            if len(improved_plan) > len(plan) * 0.75 and "Phase" in improved_plan:
+                plan = f"📋 【Master Plan（已通过 Benjamin 验证）】\n{improved_plan}"
+                history[0] = {"speaker": "System", "content": plan}
+                logging.info("✅ Master Plan 已通过 Benjamin 验证并优化")
+                if log_callback:
+                    log_callback("📋 Master Plan 已通过严格验证")
+
+            tracker.checkpoint("2.6️⃣ Plan Validation Pass")
+
         # ===== 加载历史记忆 =====
         if use_memory and memory_key in self.memory:
             memory_text = "\n".join([
@@ -1863,7 +1896,9 @@ class MultiAgentSwarm:
                 "1. 不要出现 Thinking / Action / Action Input\n"
                 "2. 不要出现任何 JSON\n"
                 "3. 直接用**自然、流畅、专业、美观**的 Markdown 输出（标题、列表、表格、粗体、引用、表情等），让用户一眼就懂、阅读愉快。\n"
-                "4. 如果需要生成文件，请按下方规则处理；否则直接开始输出答案。\n\n"
+                "4. 如果需要生成文件，请按下方规则处理；否则直接开始输出答案。\n"
+                "5. 在输出前必须自查：所有 Master Plan 阶段是否都被覆盖？若有遗漏或用户明显需要结构化文件，必须先调用 write_file 生成报告。\n"
+                "6. 完成后在答案最底部始终添加一行：【执行完成度：已覆盖所有Plan阶段】\n\n"
                 # =============================================================================
                 "请综合以上全部讨论，给出**最准确、最完整、最高质量**的最终答案。\n\n"
 
@@ -2105,7 +2140,9 @@ class MultiAgentSwarm:
                 "1. 不要出现 Thinking / Action / Action Input\n"
                 "2. 不要出现任何 JSON\n"
                 "3. 直接用**自然、流畅、专业、美观**的 Markdown 输出，让用户一眼就懂。\n"
-                "4. 现在直接开始输出答案。\n\n"
+                "4. 现在直接开始输出答案。\n"
+                "5. 在输出前必须自查：所有 Master Plan 阶段是否都被覆盖？若有遗漏或用户明显需要结构化文件，必须先调用 write_file 生成报告。\n"
+                "6. 完成后在答案最底部始终添加一行：【执行完成度：已覆盖所有Plan阶段】\n\n"
                 # ===============================================================
                 "请简洁、直接地回答用户问题。"
             ),
@@ -2212,7 +2249,13 @@ class MultiAgentSwarm:
         return final_answer
 
     def _compress_history(self, history: List[Dict], max_tokens_approx: int = 20000) -> List[Dict]:
-        """极简滚动压缩：只保留最近N轮 + Primal摘要"""
+        """极简滚动压缩：只保留最近N轮 + Primal摘要 + 永久保留 Master Plan（v3.1 优化版）
+
+        核心改进：
+        - Master Plan 永远保留在压缩历史最前面（防止最终综合时丢失计划）
+        - 短历史直接返回（零开销）
+        - 超长时才触发 Leader 总结兜底
+        """
         if len(history) < 8:  # 短历史不压缩
             return history
 
@@ -2221,18 +2264,38 @@ class MultiAgentSwarm:
         if total_chars < max_tokens_approx * 2:
             return history
 
-        # 保留：系统提示 + 最近3轮 + Primal记忆 + 最终答案
-        compressed = [h for h in history if h["speaker"] == "System" and "Primal记忆" in str(h.get("content", ""))]
-        compressed.extend(history[-6:])  # 保留最近3轮讨论（每轮2条左右）
+        # 🔥【关键优化】永远保留 Master Plan（放在最前面）
+        plan_msg = next(
+            (h for h in history if "Master Plan" in str(h.get("content", ""))),
+            None
+        )
+
+        # 保留：Primal记忆 + Master Plan + 最近3轮讨论
+        compressed = [
+            h for h in history
+            if h["speaker"] == "System" and "Primal记忆" in str(h.get("content", ""))
+        ]
+
+        if plan_msg:
+            compressed.insert(0, plan_msg)  # Master Plan 永远第一位
+
+        compressed.extend(history[-6:])  # 保留最近3轮（每轮约2条）
 
         # 如果还是太长，让Leader做一次超短总结
         if len(str(compressed)) > max_tokens_approx * 3:
-            summary_prompt = "请用800字以内总结以上全部历史，只保留关键决策、教训和结论，不要重复细节。"
+            summary_prompt = (
+                "请用800字以内总结以上全部历史，"
+                "只保留关键决策、教训和结论，不要重复细节。"
+            )
             short_summary = self.leader.generate_response(
                 [{"speaker": "System", "content": summary_prompt}] + compressed[-4:],
-                0, force_non_stream=True
+                0,
+                force_non_stream=True
             )
-            compressed = [{"speaker": "System", "content": f"📜 历史压缩总结：\n{short_summary}"}]
+            compressed = [{
+                "speaker": "System",
+                "content": f"📜 历史压缩总结：\n{short_summary}"
+            }]
 
         return compressed
 
