@@ -1202,14 +1202,43 @@ def start_email_poller(config: dict):
                         print("🤖 AI 处理中...")
 
                         # ✅ 调用 Swarm
-                        if global_swarm:
-                            answer = global_swarm.solve(
-                                question,
-                                use_memory=True,
-                                memory_key="email_auto"
-                            )
-                        else:
-                            answer = "❌ Swarm 未初始化"
+                        # 修改为：
+                        enhanced_question = question + """
+
+                        【强制执行指令】
+                        这是一个邮件场景，收件人期待**可直接使用的完整结果**，而非任务计划或执行日志。
+                        
+                        1. **执行，而非计划**：
+                           - 如果生成了 Master Plan（任务拆解表格），必须**真正执行每个子任务**
+                           - 禁止仅返回"| ID | 子任务 | Phase |"这样的计划表格
+                           - 必须调用工具、获取数据、生成实际内容
+                        2. **输出格式要求**：
+                           - 面向收件人，而非面向系统内部
+                           - 包含实际内容：数据、链接、图表、文件路径
+                           - 结构清晰：标题 → 核心要点 → 详细分析 → 来源/附件
+                        
+                        3. **质量标准**：
+                           - 完整性：涵盖用户请求的所有方面
+                           - 真实性：所有信息都有来源或工具输出支持
+                           - 可用性：用户无需二次处理，可直接使用
+                        
+                        ❌ **禁止输出**：
+                        - 任务拆解表格（如 "| ID | 子任务描述 | Phase 1 |"）
+                        - 执行日志（如 "已调用工具 web_search..."）
+                        - 空洞的讨论（如 "可以从以下几个方面分析..."）
+                        
+                        ✅ **必须输出**：
+                        - 实际内容（新闻摘要、数据分析结果、报告文件等）
+                        - 信息来源（如有。例如链接、数据来源等）
+                        - 结构化呈现（Markdown 格式，便于阅读）
+                        """
+
+                        answer = global_swarm.solve(
+                            enhanced_question,
+                            use_memory=True,
+                            memory_key="email_auto",
+                            force_complexity="complex"  # 确保进入完整模式
+                        )
 
                         print(f"✅ AI 完成（{len(answer)} 字符）")
 

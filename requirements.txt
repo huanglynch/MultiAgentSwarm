@@ -10,6 +10,7 @@ pyyaml>=6.0
 requests>=2.32.0
 beautifulsoup4>=4.12.0
 duckduckgo-search>=6.0.0
+ddgs
 
 # ====================== 向量记忆 & 嵌入模型 ======================
 chromadb>=0.5.0
