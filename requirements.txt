@@ -36,9 +36,13 @@ torchvision>=0.15.0
 torchaudio>=2.0.0
 
 # ====================== 开发/调试工具 ======================
-# tqdm>=4.66.0
-# rich>=13.0.0             # 美化终端日志（可选但推荐）
-# loguru>=0.7.0            # 结构化日志（可选）
+tqdm>=4.66.0
+rich>=13.0.0             # 美化终端日志（可选但推荐）
+loguru>=0.7.0            # 结构化日志（可选）
+
+lark_oapi
+imap_tools
+Markdown>=3.6
 
 # ====================== 安装说明（强烈建议按顺序执行） ======================
 # 1. 推荐方式（最快）：
@@ -52,6 +56,5 @@ torchaudio>=2.0.0
 #    opensandbox-server init-config ~/.sandbox.toml --example docker
 #    # 新开终端运行服务（保持后台运行）：
 #    opensandbox-server
-
 
 # 重启 MultiAgentSwarm 后，控制台会自动检测并提示当前沙箱模式。

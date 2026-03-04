@@ -30,6 +30,7 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from duckduckgo_search import DDGS
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 import glob
@@ -2001,104 +2002,78 @@ class MultiAgentSwarm:
             return round_num == 1 or (prev_quality > 0 and prev_quality < threshold)
 
     def _classify_task_complexity(self, task: str) -> str:
-        """智能任务分类器（兼容推理模型）"""
+        """智能任务分类器 v3（邮件清洗 + 新闻强规则 + AI优先决策）"""
+        # ===== 邮件格式智能清洗（最重要）=====
+        if "[邮件主题]" in task and "[邮件内容]" in task:
+            try:
+                task = task.split("[邮件内容]")[-1].strip()
+                task = re.sub(r'^\[.*?\]\s*', '', task, flags=re.DOTALL).strip()
+                logging.info(f"📧 邮件清洗后用于分类: {task[:100]}...")
+            except:
+                pass
+
         task_lower = task.lower().strip()
+        task_len = len(task)
 
-        # 快速规则过滤（保持不变）
-        if any(kw in task_lower for kw in ["继续", "详细", "再", "然后", "为什么", "怎么", "解释一下",
-                                           "more details", "elaborate", "next"]) and len(task) < 150:
-            logging.info("🟡 对话跟进 → MEDIUM 模式")
-            return "medium"
-
-        simple_patterns = [
-            len(task) < 20 and any(
-                word in task_lower for word in ["你好", "hi", "hello", "hey", "谢谢", "thank", "嘿", "ok", "好的"]),
-            task.endswith("?") and len(task) < 30,
-            task.startswith(("什么是", "who is", "when", "where")) and len(task) < 50,
-        ]
-        if any(simple_patterns):
-            logging.info("🟢 任务分类: SIMPLE (规则匹配)")
-            return "simple"
-
-        complex_patterns = [
-            any(word in task_lower for word in ["分析报告", "深度", "对比", "评估", "战略", "方案", "代码审查"]),
-            task.count("并且") + task.count("然后") + task.count("同时") + task.count("and then") >= 2,
-            any(word in task_lower for word in ["写入", "保存", "生成文件", "write to", "save to", "下载", "导出"]),
-            len(task) > 200,
-        ]
-        if any(complex_patterns):
-            logging.info("🔴 任务分类: COMPLEX (规则匹配)")
+        # ===== 强规则层（最高优先级，极快）=====
+        news_keywords = ["新闻", "news", "最新", "动态", "发生了什么", "情势", "局势",
+                         "伊朗", "iran", "中东", "以色列", "美国", "冲突", "核", "军演"]
+        if any(kw in task_lower for kw in news_keywords) and task_len > 8:
+            logging.info("🔴 新闻/实时查询 → 强制 COMPLEX 模式")
             return "complex"
 
-        # AI 判断（兼容推理模型）
+        if any(kw in task_lower for kw in ["报告", "分析", "总结", "整理", "导出", "生成文件", "写一篇", "详细分析"]):
+            logging.info("🔴 报告/深度任务 → COMPLEX")
+            return "complex"
+
+        if any(kw in task_lower for kw in
+               ["继续", "详细", "再", "然后", "为什么", "怎么", "解释一下"]) and task_len < 180:
+            logging.info("🟡 对话跟进 → MEDIUM")
+            return "medium"
+
+        # ===== 极简问候/简单问题（规则兜底）=====
+        if (task_len < 25 and any(w in task_lower for w in ["你好", "hi", "hello", "嘿", "谢谢", "ok", "好的"])) or \
+                (task.endswith("?") and task_len < 35):
+            logging.info("🟢 简单问候 → SIMPLE")
+            return "simple"
+
+        # ===== AI优先决策（模糊情况最准）=====
         classify_prompt = (
-            f"任务: {task[:500]}\n\n"
-            "请严格只回复一个词判断复杂度（不要解释，不要多余字符）：\n"
-            "- simple: 简单问候/单句问答/查询\n"
-            "- medium: 需要分析但不复杂（如解释概念、简单建议）\n"
-            "- complex: 需要深度分析/多步骤/协作/生成报告/编辑/下载\n\n"
-            "回复: "  # ← 添加引导词，让模型直接补全
+            f"任务: {task[:480]}\n\n"
+            "只回复一个词（不要解释，不要多余字符）：simple / medium / complex\n\n"
+            "判断规则：\n"
+            "- simple：问候、单句事实、日常聊天\n"
+            "- medium：需要一点解释的概念问题\n"
+            "- complex：新闻、实时动态、报告、分析、生成文件、多步任务\n\n"
+            "回复:"
         )
 
-        for attempt in range(2):
-            try:
-                response = self.leader.client.chat.completions.create(
-                    model=self.leader.model,
-                    messages=[
-                        {"role": "system",
-                         "content": "你是任务复杂度分类器。只回复一个词：simple、medium 或 complex。不要解释。"},
-                        {"role": "user", "content": classify_prompt}
-                    ],
-                    temperature=0.0,
-                    max_tokens=150,  # ← 关键修复：给推理模型足够空间
-                    timeout=15.0,
-                    stream=False
-                )
+        try:
+            response = self.leader.client.chat.completions.create(
+                model=self.leader.model,
+                messages=[
+                    {"role": "system", "content": "你是任务复杂度分类器。只回复一个词：simple、medium 或 complex。"},
+                    {"role": "user", "content": classify_prompt}
+                ],
+                temperature=0.0,
+                max_tokens=20,
+                timeout=10
+            )
+            content = (response.choices[0].message.content or "").strip().lower()
 
-                if not response or not response.choices:
-                    logging.warning(f"⚠️ 第{attempt + 1}次分类返回无效响应")
-                    continue
+            if "complex" in content:
+                logging.info(f"🔴 AI判断 → COMPLEX")
+                return "complex"
+            elif "medium" in content:
+                logging.info(f"🟡 AI判断 → MEDIUM")
+                return "medium"
+            else:
+                logging.info(f"🟢 AI判断 → SIMPLE")
+                return "simple"
 
-                choice = response.choices[0]
-                content = choice.message.content
-
-                # 🔧 推理模型兼容：从 reasoning_content 提取
-                if content is None:
-                    reasoning = getattr(choice.message, 'reasoning_content', '') or getattr(choice.message, 'reasoning',
-                                                                                            '') or ''
-                    if reasoning:
-                        reasoning_lower = reasoning.lower()
-                        # 查找最后出现的分类词（推理模型通常在最后给出结论）
-                        for keyword in ['simple', 'medium', 'complex']:
-                            if keyword in reasoning_lower:
-                                content = keyword
-                                logging.info(f"🔍 从 reasoning 中提取分类: {content}")
-                                break
-
-                if content is None:
-                    logging.warning(f"⚠️ 第{attempt + 1}次分类返回 None，finish_reason={choice.finish_reason}")
-                    continue
-
-                content = content.strip().lower()
-
-                # 模糊匹配
-                if "simple" in content and "complex" not in content:
-                    logging.info(f"🟢 任务分类: SIMPLE (AI判断，第{attempt + 1}次)")
-                    return "simple"
-                elif "complex" in content:
-                    logging.info(f"🔴 任务分类: COMPLEX (AI判断，第{attempt + 1}次)")
-                    return "complex"
-                elif "medium" in content:
-                    logging.info(f"🟡 任务分类: MEDIUM (AI判断，第{attempt + 1}次)")
-                    return "medium"
-                else:
-                    logging.warning(f"⚠️ 第{attempt + 1}次分类返回无效值: '{content}'")
-
-            except Exception as e:
-                logging.warning(f"⚠️ 第{attempt + 1}次分类失败: {e}")
-
-        logging.warning("⚠️ 分类器连续失败，默认使用 MEDIUM（安全回退）")
-        return "medium"
+        except Exception as e:
+            logging.warning(f"AI分类失败: {e}，默认medium")
+            return "medium"
 
     def _solve_simple(
             self,
@@ -2133,18 +2108,14 @@ class MultiAgentSwarm:
             history,
             round_num=1,
             system_extra=(
-                # ====================== 【最终答案专用指令】 ======================
                 "【最终答案专用指令 - 必须严格遵守】\n"
                 "这是**直接给用户阅读**的最终答案！\n"
-                "请**立即抛弃**所有内部格式：\n"
-                "1. 不要出现 Thinking / Action / Action Input\n"
-                "2. 不要出现任何 JSON\n"
-                "3. 直接用**自然、流畅、专业、美观**的 Markdown 输出，让用户一眼就懂。\n"
-                "4. 现在直接开始输出答案。\n"
-                "5. 在输出前必须自查：所有 Master Plan 阶段是否都被覆盖？若有遗漏或用户明显需要结构化文件，必须先调用 write_file 生成报告。\n"
-                "6. 完成后在答案最底部始终添加一行：【执行完成度：已覆盖所有Plan阶段】\n\n"
-                # ===============================================================
-                "请简洁、直接地回答用户问题。"
+                "1. 请**立即抛弃**所有内部格式（Thinking/Action/Phase/Master Plan）\n"
+                "2. 不要出现任何列表编号、阶段划分、Phase字样\n"
+                "3. 用**自然、流畅、专业、友好的中文**直接回答（像正常人聊天一样）\n"
+                "4. 开头可以加一句“以下是最新伊朗新闻摘要：”让用户舒服\n"
+                "5. 结尾自然结束，不要加任何执行完成度或下一步\n"
+                "现在请直接输出答案。"
             ),
             force_non_stream=False,
             stream_callback=stream_callback,

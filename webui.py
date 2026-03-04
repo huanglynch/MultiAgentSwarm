@@ -1093,10 +1093,16 @@ def start_email_poller(config: dict):
             plain_text = re.sub(r'\n{3,}', '\n\n', plain_text)
 
             # Markdown → 美观 HTML（核心）
-            html_content = markdown.markdown(
-                body,
-                extensions=['tables', 'fenced_code', 'nl2br', 'sane_lists', 'attr_list']
-            )
+            try:
+                # 使用 'extra' 元扩展（官方推荐），自动包含 tables + fenced_code + nl2br 等
+                # 彻底解决“table module”找不到的问题
+                html_content = markdown.markdown(
+                    body,
+                    extensions=['extra', 'attr_list']
+                )
+            except Exception as e:
+                print(f"⚠️ Markdown 转换失败，使用纯文本兜底: {e}")
+                html_content = body.replace('\n', '<br>')
 
             full_html = f"""
             <!DOCTYPE html>
