@@ -44,9 +44,8 @@ GetMessageResourceRequest = None
 
 
 # ====================== 邮件编码辅助函数 ======================
-# ====================== 邮件编码辅助函数（终极增强版）======================
 def decode_email_payload(part):
-    """增强版邮件内容解码（严格编码检测）"""
+    """增强版邮件内容解码（严格编码检测，支持中日韩）"""
     try:
         payload = part.get_payload(decode=True)
         if not payload:
@@ -64,12 +63,18 @@ def decode_email_payload(part):
             except Exception as e:
                 print(f"  ⚠️ charset={charset} 解码失败: {e}")
 
-        # 🔥 智能编码检测（严格验证）
+        # 🔥 智能编码检测（严格验证，新增日语支持）
         encodings = [
+            # 中文编码
             ('gbk', lambda s: sum(1 for c in s if '\u4e00' <= c <= '\u9fff')),  # 中文字符数
             ('gb2312', lambda s: sum(1 for c in s if '\u4e00' <= c <= '\u9fff')),
-            ('utf-8', lambda s: sum(1 for c in s if c.isprintable())),
             ('big5', lambda s: sum(1 for c in s if '\u4e00' <= c <= '\u9fff')),
+            # 日语编码
+            ('shift_jis', lambda s: sum(1 for c in s if '\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff' or '\u4e00' <= c <= '\u9fff')),  # 平假名+片假名+汉字
+            ('euc-jp', lambda s: sum(1 for c in s if '\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff' or '\u4e00' <= c <= '\u9fff')),
+            ('iso-2022-jp', lambda s: sum(1 for c in s if '\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff' or '\u4e00' <= c <= '\u9fff')),
+            # 通用编码
+            ('utf-8', lambda s: sum(1 for c in s if c.isprintable())),
             ('iso-8859-1', lambda s: sum(1 for c in s if 32 <= ord(c) <= 126)),
             ('windows-1252', lambda s: sum(1 for c in s if c.isalpha()))
         ]
@@ -228,7 +233,8 @@ async def startup_event():
     # 飞书启动
     app_id = feishu_config.get("app_id", "").strip()
     app_secret = feishu_config.get("app_secret", "").strip()
-    if app_id and app_secret:
+    feishu_enable = feishu_config.get("enable", False)
+    if app_id and app_secret and feishu_enable:
         print("🚀 飞书配置有效，正在启动长连接服务...")
         threading.Thread(
             target=start_feishu_long_connection,
@@ -240,7 +246,8 @@ async def startup_event():
 
     # 邮箱启动
     email_config = cfg.get("email", {})
-    if email_config.get("imap_user"):
+    email_enable = email_config.get("enable", False)
+    if email_config.get("imap_user") and email_enable:
         threading.Thread(
             target=start_email_poller,
             args=(email_config,),

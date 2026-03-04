@@ -944,6 +944,18 @@ class MultiAgentSwarm:
         with open(config_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
 
+        # ====================== 【低内存自适应模式 - 最小改动实现】 ======================
+        # 目的：2GB Ubuntu / 4GB Win10 流畅运行，自动覆盖高内存配置
+        if cfg.get("low_memory_mode", False):
+            cfg.setdefault("swarm", {})["max_concurrent_agents"] = 1
+            cfg.setdefault("swarm", {})["max_rounds"] = 6
+            cfg.setdefault("swarm", {}).setdefault("vector_memory", {})["enabled"] = False
+
+            logging.info("🛡️ 低内存模式已激活（low_memory_mode=true）")
+            logging.info("   → max_concurrent_agents=1 | max_rounds=6 | VectorMemory=关闭")
+            print("🛡️ 低内存优化模式已启用（Vector关闭 + 并发1 + 轮次6）")
+        # =============================================================================
+
         # OpenAI 配置
         oai = cfg.get("openai", {})
         self.default_model = oai.get("default_model", "gpt-4o-mini")
@@ -955,7 +967,10 @@ class MultiAgentSwarm:
         self.mode = swarm.get("mode", "fixed")
         # self.max_rounds = swarm.get("max_rounds", 3 if self.mode == "fixed" else 10)
         # 根据上下文限制动态轮次（64K时保守，128K时激进）
-        self.max_rounds = 8 if "64" in str(self.context_limit_k) else 12  # 或者读配置
+        #self.max_rounds = 8 if "64" in str(self.context_limit_k) else 12  # 或者读配置
+        # 根据上下文限制动态轮次（64K时保守，128K时激进）——支持low_memory_mode覆盖
+        self.max_rounds = swarm.get("max_rounds",
+                                    8 if "64" in str(self.context_limit_k) else 12)
         self.max_concurrent_agents = swarm.get("max_concurrent_agents", 2)
         self.reflection_planning = swarm.get("reflection_planning", True)
         self.enable_web_search = swarm.get("enable_web_search", False)
