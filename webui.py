@@ -130,7 +130,9 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 print("✅ /uploads 下载服务已启用")
 
 # ====================== 全局变量 ======================
-swarm: Optional[MultiAgentSwarm] = None
+# swarm: Optional[MultiAgentSwarm] = None # 单session
+swarms: Dict[str, MultiAgentSwarm] = {}   # ← 每个 session 一个独立实例
+global_swarm: Optional[MultiAgentSwarm] = None    # ← 新增：飞书、邮箱、配置API共用一个（最简方案）
 conversations: Dict[str, List[Dict]] = {}
 
 
@@ -149,18 +151,6 @@ class ConfigUpdate(BaseModel):
     force_complexity: Optional[str] = None
 
 
-# ====================== 初始化 Swarm ======================
-def init_swarm():
-    """初始化 Swarm 实例"""
-    global swarm
-    try:
-        swarm = MultiAgentSwarm(config_path="swarm_config.yaml")
-        print("✅ Swarm 初始化成功")
-    except Exception as e:
-        print(f"❌ Swarm 初始化失败: {e}")
-        raise
-
-
 # ====================== 工具函数 ======================
 def get_or_create_session(session_id: Optional[str] = None) -> str:
     """获取或创建会话 ID"""
@@ -172,24 +162,41 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
     return session_id
 
 
+def get_or_create_swarm(session_id: str) -> MultiAgentSwarm:
+    """懒加载 + 每个 session_id 一个完全独立的 Swarm 实例（核心 8 行）"""
+    global swarms
+    if session_id not in swarms:
+        print(f"🚀 为会话 {session_id[:8]}... 创建独立 Swarm 实例")
+        swarms[session_id] = MultiAgentSwarm(config_path="swarm_config.yaml")
+    return swarms[session_id]
+
+
 def update_config(config: ConfigUpdate):
-    """动态更新 Swarm 配置"""
-    if not swarm:
-        raise HTTPException(status_code=500, detail="Swarm 未初始化")
+    """动态更新 Swarm 配置（作用于全局实例，飞书/邮箱/配置页共用）"""
+    global global_swarm
+    if not global_swarm:
+        raise HTTPException(status_code=500, detail="Swarm 未初始化（全局实例）")
 
-    swarm.enable_adversarial_debate = config.adversarial_debate
-    swarm.enable_meta_critic = config.meta_critic
-    swarm.enable_task_decomposition = config.task_decomposition
-    swarm.enable_knowledge_graph = config.knowledge_graph
-    swarm.enable_adaptive_depth = config.adaptive_reflection
-    swarm.intelligent_routing_enabled = config.intelligent_routing
-    swarm.max_reflection_rounds = config.max_rounds
-    swarm.reflection_quality_threshold = config.quality_threshold
-    swarm.stop_quality_threshold = config.stop_threshold
-    swarm.quality_convergence_delta = config.convergence_delta
-    swarm.force_complexity = config.force_complexity
+    # ✅ 批量更新所有高级特性开关
+    global_swarm.enable_adversarial_debate = config.adversarial_debate
+    global_swarm.enable_meta_critic = config.meta_critic
+    global_swarm.enable_task_decomposition = config.task_decomposition
+    global_swarm.enable_knowledge_graph = config.knowledge_graph
+    global_swarm.enable_adaptive_depth = config.adaptive_reflection
+    global_swarm.intelligent_routing_enabled = config.intelligent_routing
 
-    print(f"✅ 配置已更新: {config.dict()}")
+    # ✅ 反思与路由参数
+    global_swarm.max_reflection_rounds = config.max_rounds
+    global_swarm.reflection_quality_threshold = config.quality_threshold
+    global_swarm.stop_quality_threshold = config.stop_threshold
+    global_swarm.quality_convergence_delta = config.convergence_delta
+    global_swarm.force_complexity = config.force_complexity
+
+    print(f"✅ 配置已全局更新: {config.dict()}")
+    # 可选：同步更新所有活跃 session 的实例（极致一致性）
+    for sid, swarm_inst in list(swarms.items()):
+        swarm_inst.enable_adversarial_debate = config.adversarial_debate
+        # ...（如果需要也可以同步其他参数，这里保持最小改动，只同步核心开关）
 
 
 def sanitize_filename(original_name: str) -> str:
@@ -228,7 +235,8 @@ async def startup_event():
         cfg = yaml.safe_load(f)
     feishu_config = cfg.get("feishu", {})
 
-    init_swarm()
+    # 删除或注释掉这行（因为现在懒加载）：
+    # init_swarm()
 
     # 飞书启动
     app_id = feishu_config.get("app_id", "").strip()
@@ -255,6 +263,12 @@ async def startup_event():
             name="Email-Poller"
         ).start()
         print("🚀 邮件配置有效，正在启动邮箱连接服务...")
+
+    # 初始化全局 Swarm（供飞书、邮箱、配置API使用）
+    global global_swarm
+    if not global_swarm:
+        print("🚀 初始化全局 Swarm（飞书/邮箱专用）")
+        global_swarm = MultiAgentSwarm(config_path="swarm_config.yaml")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -288,9 +302,12 @@ async def get_session(session_id: str):
 
 @app.delete("/api/session/{session_id}")
 async def delete_session(session_id: str):
-    """删除会话"""
+    """删除会话 + 清理独立 Swarm 实例"""
     if session_id in conversations:
         del conversations[session_id]
+    if session_id in swarms:          # ← 新增
+        del swarms[session_id]
+        print(f"🗑️ 已释放会话 {session_id[:8]} 的 Swarm 实例")
     return {"status": "ok"}
 
 
@@ -306,22 +323,23 @@ async def update_swarm_config(config: ConfigUpdate):
 
 @app.get("/api/config")
 async def get_swarm_config():
-    """获取当前 Swarm 配置"""
-    if not swarm:
-        raise HTTPException(status_code=500, detail="Swarm 未初始化")
+    """获取当前 Swarm 配置（从全局实例读取）"""
+    global global_swarm
+    if not global_swarm:
+        raise HTTPException(status_code=500, detail="Swarm 未初始化（全局实例）")
 
     return {
-        "adversarial_debate": swarm.enable_adversarial_debate,
-        "meta_critic": swarm.enable_meta_critic,
-        "task_decomposition": swarm.enable_task_decomposition,
-        "knowledge_graph": swarm.enable_knowledge_graph,
-        "adaptive_reflection": swarm.enable_adaptive_depth,
-        "intelligent_routing": swarm.intelligent_routing_enabled,
-        "max_rounds": swarm.max_reflection_rounds,
-        "quality_threshold": swarm.reflection_quality_threshold,
-        "stop_threshold": swarm.stop_quality_threshold,
-        "convergence_delta": swarm.quality_convergence_delta,
-        "force_complexity": swarm.force_complexity,
+        "adversarial_debate": global_swarm.enable_adversarial_debate,
+        "meta_critic": global_swarm.enable_meta_critic,
+        "task_decomposition": global_swarm.enable_task_decomposition,
+        "knowledge_graph": global_swarm.enable_knowledge_graph,
+        "adaptive_reflection": global_swarm.enable_adaptive_depth,
+        "intelligent_routing": global_swarm.intelligent_routing_enabled,
+        "max_rounds": global_swarm.max_reflection_rounds,
+        "quality_threshold": global_swarm.reflection_quality_threshold,
+        "stop_threshold": global_swarm.stop_quality_threshold,
+        "convergence_delta": global_swarm.quality_convergence_delta,
+        "force_complexity": global_swarm.force_complexity,
     }
 
 
@@ -422,12 +440,15 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_json()
 
             if data.get("type") == "cancel":
-                if swarm:
-                    swarm.cancel_current_task()
-                    await websocket.send_json({
-                        "type": "log",
-                        "content": "🛑 正在尝试取消任务..."
-                    })
+                session_id = data.get("session_id")
+                if session_id and session_id in swarms:
+                    swarms[session_id].cancel_current_task()
+                elif global_swarm:
+                    global_swarm.cancel_current_task()
+                await websocket.send_json({
+                    "type": "log",
+                    "content": "🛑 正在尝试取消任务..."
+                })
                 continue
 
             if data.get("type") in ("pong", "ping"):
@@ -441,13 +462,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
                 continue
 
-            if swarm:
-                swarm._reset_cancel_flag()
-
+            # ==================== 关键修复：顺序 + 定义正确 ====================
             session_id = get_or_create_session(data.get("session_id"))
             use_memory = data.get("use_memory", False)
             memory_key = data.get("memory_key", "default")
             force_complexity = data.get("force_complexity")
+
+            # 当前会话的独立 Swarm 实例（必须先定义！）
+            current_swarm = get_or_create_swarm(session_id)
+            current_swarm._reset_cancel_flag()
+            # ============================================================
 
             user_msg = {
                 "role": "user",
@@ -496,14 +520,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
                                 # PDF / TXT / MD 处理
                                 if path.endswith('.pdf'):
-                                    result = swarm.tool_registry['pdf_reader']['func'](file_path=path)
+                                    result = current_swarm.tool_registry['pdf_reader']['func'](file_path=path)
                                     if result.get('success'):
                                         content = result.get('content', '')[:MAX_PREVIEW_LENGTH]
                                         file_contents.append(
                                             f"### 📄 {Path(path).name} (PDF)\n内容:\n{content}"
                                         )
                                 elif path.endswith(('.txt', '.md')):
-                                    result = swarm.tool_registry['read_file']['func'](file_path=path)
+                                    result = current_swarm.tool_registry['read_file']['func'](file_path=path)
                                     if result.get('success'):
                                         content = result.get('content', '')[:MAX_PREVIEW_LENGTH]
                                         file_contents.append(
@@ -584,7 +608,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         loop
                     )
 
-                if swarm and swarm._check_cancellation():
+                if current_swarm and current_swarm._check_cancellation():
                     await websocket.send_json({
                         "type": "error",
                         "content": "⏸️ 任务已被用户取消"
@@ -594,7 +618,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 answer = await loop.run_in_executor(
                     None,
-                    lambda: swarm.solve(
+                    lambda: current_swarm.solve(  # ← 把 swarm 改成 current_swarm
                         full_message,
                         use_memory,
                         memory_key,
@@ -670,8 +694,8 @@ async def websocket_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         print(f"🔌 WebSocket 断开连接")
-        if swarm:
-            swarm.cancel_current_task()
+        if global_swarm:
+            global_swarm.cancel_current_task()
     except Exception as e:
         print(f"💥 WebSocket 致命错误: {e}")
         import traceback
@@ -821,7 +845,7 @@ def start_feishu_long_connection():
                 print(f"📥 Feishu 收到消息: {full_message[:70]}...")
 
                 # ✅ 调用 Swarm
-                answer = swarm.solve(
+                answer = global_swarm.solve(
                     full_message,
                     use_memory=True,
                     memory_key="feishu_long"
@@ -1149,8 +1173,8 @@ def start_email_poller(config: dict):
                         print("🤖 AI 处理中...")
 
                         # ✅ 调用 Swarm
-                        if swarm:
-                            answer = swarm.solve(
+                        if global_swarm:
+                            answer = global_swarm.solve(
                                 question,
                                 use_memory=True,
                                 memory_key="email_auto"
