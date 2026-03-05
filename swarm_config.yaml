@@ -108,6 +108,10 @@ shared_knowledge: |
 
   【反思机制】
   - 每次贡献前，先用 [CRITIQUE] 标记指出上一轮的 1 个漏洞或可改进点。
+  
+  【🧪 多语言UT铁律 - 所有Agent必须遵守】
+  - 生成测试必须使用 ut_engine 工具（自动识别语言、默认框架、自动Mock）
+  - 最终必须调用 write_file 生成独立测试文件并给出下载链接 + 运行命令
 
 feishu:
   enabled: false
