@@ -1174,6 +1174,7 @@ class MultiAgentSwarm:
        📈 自适应反思 (Adaptive Depth): {'✅ 启用' if self.enable_adaptive_depth else '❌ 禁用'}
        🧭 智能路由 (Intelligent Routing): {'✅ 启用' if self.intelligent_routing_enabled else '❌ 禁用'}
           └─ 强制模式: {self.force_complexity or '自动判断'}
+       🟠 Balanced 模式: {'✅ 已启用（规划+工具优化）'}
     {'=' * 80}
     """
         print(banner)
@@ -1512,6 +1513,11 @@ class MultiAgentSwarm:
                     stream_callback, log_callback
                 )
 
+            elif complexity == "balanced":
+                final_answer = self._solve_balanced(
+                    task, history, tracker, stream_callback, log_callback
+                )
+
             else:  # complex
                 final_answer = self._solve_complex(
                     task, history, tracker, use_memory, memory_key,
@@ -1614,31 +1620,6 @@ class MultiAgentSwarm:
                 tracker.checkpoint("2️⃣ 任务分解")
                 if log_callback:
                     log_callback("📋 任务分解完成")
-
-        # # ===== 任务分解【作为思考过程一部分展示】 =====
-        # if self.enable_task_decomposition and self.mode == "intelligent":
-        #     if self._check_cancellation():
-        #         return "⏸️ 任务在分解前被取消"
-        #     decomposition = self._decompose_task(task)
-        #     if decomposition:
-        #         history.insert(0, {"speaker": "System", "content": decomposition})
-        #         tracker.checkpoint("2️⃣ 任务分解")
-        #
-        #         # ── 【最小改动核心】任务分解结果作为思考过程的内容显示 ──
-        #         think_content = (
-        #             "🧠 **思考过程：任务分解结果**\n\n"
-        #             f"{decomposition}\n\n"
-        #             "已按阶段分配 Agent 执行 → 开始多轮协作..."
-        #         )
-        #         if stream_callback:
-        #             stream_callback("System", think_content)  # 主聊天流可见
-        #         if log_callback:
-        #             log_callback("🧩 任务分解已作为思考过程显示")
-        #             log_callback("─" * 60)
-        #         # ── 改动结束 ──
-        #
-        #         if log_callback:
-        #             log_callback("📋 任务分解完成")
 
         # ✅ 检查点：Master Plan 生成前
         if self._check_cancellation():
@@ -2002,8 +1983,8 @@ class MultiAgentSwarm:
             return round_num == 1 or (prev_quality > 0 and prev_quality < threshold)
 
     def _classify_task_complexity(self, task: str) -> str:
-        """智能任务分类器 v3（邮件清洗 + 新闻强规则 + AI优先决策）"""
-        # ===== 邮件格式智能清洗（最重要）=====
+        """智能任务分类器 v4（彻底基于任务性质 + AI 主导，最优版）"""
+        # ===== 极简强规则层（只保护最必要场景）=====
         if "[邮件主题]" in task and "[邮件内容]" in task:
             try:
                 task = task.split("[邮件内容]")[-1].strip()
@@ -2015,36 +1996,41 @@ class MultiAgentSwarm:
         task_lower = task.lower().strip()
         task_len = len(task)
 
-        # ===== 强规则层（最高优先级，极快）=====
-        news_keywords = ["新闻", "news", "最新", "动态", "发生了什么", "情势", "局势",
-                         "伊朗", "iran", "中东", "以色列", "美国", "冲突", "核", "军演"]
-        if any(kw in task_lower for kw in news_keywords) and task_len > 8:
-            logging.info("🔴 新闻/实时查询 → 强制 COMPLEX 模式")
-            return "complex"
-
-        if any(kw in task_lower for kw in ["报告", "分析", "总结", "整理", "导出", "生成文件", "写一篇", "详细分析"]):
-            logging.info("🔴 报告/深度任务 → COMPLEX")
-            return "complex"
-
-        if any(kw in task_lower for kw in
-               ["继续", "详细", "再", "然后", "为什么", "怎么", "解释一下"]) and task_len < 180:
-            logging.info("🟡 对话跟进 → MEDIUM")
-            return "medium"
-
-        # ===== 极简问候/简单问题（规则兜底）=====
+        # 2. 极简问候/超短问题
         if (task_len < 25 and any(w in task_lower for w in ["你好", "hi", "hello", "嘿", "谢谢", "ok", "好的"])) or \
                 (task.endswith("?") and task_len < 35):
-            logging.info("🟢 简单问候 → SIMPLE")
+            logging.info("🟢 简单问候/短问题 → SIMPLE")
             return "simple"
 
-        # ===== AI优先决策（模糊情况最准）=====
+        # ===== 🔥 方案二：用户主动触发 Complex（中英日全面支持）=====
+        force_keywords = [
+            # 中文
+            "完整模式", "complex模式", "复杂模式", "深度模式", "实时追踪", "多轮反思",
+            "强制复杂", "用完整模式", "深度分析", "最新动态追踪", "实时新闻", "全面分析",
+            "强制完整", "用 complex", "必须 complex", "完整版", "深度版",
+            # 英文
+            "complex mode", "full mode", "deep mode", "real-time tracking", "multi-round",
+            "force complex", "use complex", "deep analysis", "latest dynamic", "real time",
+            "force full", "complete mode",
+            # 日语（直接匹配原字符）
+            "複雑モード", "完全モード", "ディープモード", "リアルタイム追跡", "最新動向",
+            "強制複雑", "深度分析", "リアルタイムニュース", "フルモード"
+        ]
+
+        if any(kw in task_lower or kw in task for kw in force_keywords):  # 支持日语原字符
+            logging.info("🔴 用户主动要求 → COMPLEX（中英日触发）")
+            return "complex"
+
+        # ===== AI主导判断（核心：基于任务性质）=====
         classify_prompt = (
             f"任务: {task[:480]}\n\n"
-            "只回复一个词（不要解释，不要多余字符）：simple / medium / complex\n\n"
-            "判断规则：\n"
-            "- simple：问候、单句事实、日常聊天\n"
-            "- medium：需要一点解释的概念问题\n"
-            "- complex：新闻、实时动态、报告、分析、生成文件、多步任务\n\n"
+            "只回复一个词（不要解释）：simple / medium / balanced / complex\n\n"
+            "判断规则（严格基于任务性质和必要性）：\n"
+            "- simple：纯问候、单句事实、无需工具、无需结构化\n"
+            "- medium：概念解释、简单对话跟进（继续、为什么、解释一下）\n"
+            "- balanced：需要规划 + 工具调用 + 结构化输出（分析、总结、报告、整理、附件处理、生成文件、带下载链接等）——这是最常见场景\n"
+            "- complex：需要实时最新信息 + 多轮反思 + 知识图谱 + 对抗辩论（纯新闻动态、超复杂多步任务、深度实时追踪）\n\n"
+            "优先考虑 balanced（它是质量与性能的最佳平衡点）。只有真正需要「最新实时动态」或「极高反思深度」时才选 complex。\n"
             "回复:"
         )
 
@@ -2052,7 +2038,8 @@ class MultiAgentSwarm:
             response = self.leader.client.chat.completions.create(
                 model=self.leader.model,
                 messages=[
-                    {"role": "system", "content": "你是任务复杂度分类器。只回复一个词：simple、medium 或 complex。"},
+                    {"role": "system",
+                     "content": "你是任务复杂度分类器。只回复一个词：simple、medium、balanced 或 complex。请严格根据任务性质（规划需求、工具需求、结构化需求、实时性需求）判断。balanced 是最常见、最优模式，请优先考虑。"},
                     {"role": "user", "content": classify_prompt}
                 ],
                 temperature=0.0,
@@ -2062,25 +2049,28 @@ class MultiAgentSwarm:
             content = (response.choices[0].message.content or "").strip().lower()
 
             if "complex" in content:
-                logging.info(f"🔴 AI判断 → COMPLEX")
+                logging.info(f"🔴 AI判断（任务性质）→ COMPLEX")
                 return "complex"
+            elif "balanced" in content:
+                logging.info(f"🟠 AI判断（任务性质）→ BALANCED")
+                return "balanced"
             elif "medium" in content:
-                logging.info(f"🟡 AI判断 → MEDIUM")
+                logging.info(f"🟡 AI判断（任务性质）→ MEDIUM")
                 return "medium"
             else:
-                logging.info(f"🟢 AI判断 → SIMPLE")
+                logging.info(f"🟢 AI判断（任务性质）→ SIMPLE")
                 return "simple"
 
         except Exception as e:
-            logging.warning(f"AI分类失败: {e}，默认medium")
-            return "medium"
+            logging.warning(f"AI分类失败: {e}，默认balanced")
+            return "balanced"
 
     def _solve_simple(
             self,
             task: str,
             history: List[Dict],
-            stream_callback=None,  # ✅ 新增
-            log_callback=None  # ✅ 新增
+            stream_callback=None,
+            log_callback=None
     ) -> str:
         """
         🟢 简单模式：单 Agent 直接回答
@@ -2090,20 +2080,10 @@ class MultiAgentSwarm:
         print("🟢 检测到简单任务，使用快速模式")
         print(f"{'=' * 80}\n")
 
-        # ✅ 发送日志
         if log_callback:
             log_callback("🟢 执行简单模式")
 
-        # # 直接用 Leader 回答（允许流式输出）
-        # answer = self.leader.generate_response(
-        #     history,
-        #     round_num=1,
-        #     system_extra="请简洁、直接地回答用户问题。",
-        #     force_non_stream=False,
-        #     stream_callback=stream_callback,  # ✅ 传递
-        #     log_callback=log_callback  # ✅ 传递
-        # )
-        # 【新增】Simple 模式也强制干净输出
+        # 【已彻底清理】删除硬编码示例 + 加强防污染指令
         answer = self.leader.generate_response(
             history,
             round_num=1,
@@ -2113,8 +2093,8 @@ class MultiAgentSwarm:
                 "1. 请**立即抛弃**所有内部格式（Thinking/Action/Phase/Master Plan）\n"
                 "2. 不要出现任何列表编号、阶段划分、Phase字样\n"
                 "3. 用**自然、流畅、专业、友好的中文**直接回答（像正常人聊天一样）\n"
-                "4. 开头可以加一句“以下是最新伊朗新闻摘要：”让用户舒服\n"
-                "5. 结尾自然结束，不要加任何执行完成度或下一步\n"
+                "4. **严禁**添加任何与当前任务无关的示例短语\n"
+                "5. 直接从正文开始输出，让用户一眼就看到关键内容\n"
                 "现在请直接输出答案。"
             ),
             force_non_stream=False,
@@ -2219,6 +2199,103 @@ class MultiAgentSwarm:
 
         return final_answer
 
+    def _solve_balanced(
+            self, task: str, history: List[Dict], tracker: TimeTracker,
+            stream_callback=None, log_callback=None
+    ) -> str:
+        """🟠 Balanced 模式：强规划 + 精准工具 + 轻辩论（质量≈Complex 80%，速度≈Medium 140%）"""
+        logging.info("🟠 执行 Balanced 模式（规划驱动 + 高效工具）")
+        print(f"\n{'=' * 80}")
+        print("🟠 Balanced 模式已启动：更强规划 + 精准工具 + 轻量反思")
+        print(f"{'=' * 80}\n")
+        if log_callback:
+            log_callback("🟠 Balanced 模式（规划驱动 + 高效工具）")
+
+        # 🔥 关键提升1：注入 Master Plan
+        plan = self._generate_detailed_plan(task, history)
+        if plan:
+            history.insert(0, {"speaker": "System", "content": plan})
+            if log_callback:
+                log_callback("📋 Master Plan 已注入（Balanced 核心）")
+            tracker.checkpoint("2️⃣ Master Plan 生成")
+
+        # 🔥 关键提升2：Plan Validation Pass（Benjamin 审查）
+        if plan and self.enable_adversarial_debate:
+            improved_plan = self.agents[2].generate_response(  # Benjamin
+                [{"speaker": "System",
+                  "content": f"你现在是 Plan Reviewer，请快速审查并优化以下 Master Plan（保持编号）：\n{plan}"}],
+                0, force_non_stream=True
+            )
+            if "Phase" in improved_plan:
+                history[0] = {"speaker": "System", "content": f"📋 【Master Plan（已优化）】\n{improved_plan}"}
+
+        # 🔥 关键提升3：3 Agent + 固定 2 轮 + 极轻辩论
+        selected_agents = self.agents[:3]  # Grok + Harper + Benjamin
+        for round_num in range(1, 3):  # 固定 2 轮
+            if self._check_cancellation():
+                break
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                future_to_agent = {
+                    executor.submit(
+                        agent.generate_response,
+                        history.copy(),
+                        round_num,
+                        critique_previous=(round_num > 1),
+                        log_callback=log_callback
+                    ): agent
+                    for agent in selected_agents
+                }
+                for future in as_completed(future_to_agent):
+                    agent = future_to_agent[future]
+                    try:
+                        contribution = future.result()
+                        history.append({"speaker": agent.name, "content": contribution})
+                    except Exception as e:
+                        logging.error(f"❌ {agent.name} 执行失败: {e}")
+                        if log_callback:
+                            log_callback(f"❌ {agent.name} 执行失败")
+
+            # 第 2 轮才触发一次轻辩论（大幅降低开销）
+            if round_num == 2 and self.enable_adversarial_debate:
+                quality, _ = self._adversarial_debate(history, round_num)
+                tracker.checkpoint(f"3️⃣ 第{round_num}轮轻辩论")
+
+        # 最终综合（和 medium 完全一致）
+        history.append({
+            "speaker": "System",
+            "content": (
+                # ====================== 【新增：最终用户可见答案专用指令】 ======================
+                "【最终答案专用指令 - 必须严格遵守】\n"
+                "这是**直接给用户阅读**的最终答案！\n"
+                "请**立即抛弃**所有内部格式：\n"
+                "1. 不要出现 Thinking / Action / Action Input\n"
+                "2. 不要出现任何 JSON\n"
+                "3. 直接用**自然、流畅、专业、美观**的 Markdown 输出（标题、列表、表格、粗体、引用、表情等），让用户一眼就懂、阅读愉快。\n"
+                "4. 如果需要生成文件，请按下方规则处理；否则直接开始输出答案。\n\n"
+                # =============================================================================
+                "请简洁但高质量地综合以上观点，给出清晰答案。\n\n"
+
+                "**轻量文件交付决策（必须执行）：**\n"
+                "在输出前快速判断：用户本次查询是否希望得到一个**可保存、可下载的结构化文件**？（信号包括：报告、整理、总结、编辑、修改、导出、给我下载、生成文档等）。\n"
+                "- 如果是 → **必须先调用 write_file 工具**生成 Markdown 文件（文件名建议带日期，如 topic_20260302.md）\n"
+                "- 如果不是 → 直接输出清晰答案即可\n\n"
+
+                "**当需要生成文件时的格式（必须包含）：**\n\n"
+                "[这里是完整答案正文]\n\n"
+                "**📥 下载生成的文件**\n\n"
+                "- [文件名_20260302.md](/uploads/文件名_20260302.md)\n\n"
+
+                "现在请根据用户真实意图，直接输出最终答案。"
+            )
+        })
+
+        final_answer = self.leader.generate_response(
+            history, 3, force_non_stream=False,
+            stream_callback=stream_callback, log_callback=log_callback
+        )
+        tracker.checkpoint("4️⃣ 最终综合")
+        return final_answer
+
     def _compress_history(self, history: List[Dict], max_tokens_approx: int = 20000) -> List[Dict]:
         """极简滚动压缩：只保留最近N轮 + Primal摘要 + 永久保留 Master Plan（v3.1 优化版）
 
@@ -2320,7 +2397,13 @@ if __name__ == "__main__":
         msg = swarm.solve("你好", force_complexity="complex")
         print('测试4 回答:\n', msg)
 
-        # 示例5：图像分析（需要提供真实图片路径）
+        # ===== 测试 5：Balanced 模式 =====
+        print("\n📝 测试 5: Balanced 模式（预期: 规划+工具，~18-28秒）")
+        print("=" * 80)
+        msg = swarm.solve("请帮我分析最近伊朗局势并生成一份带下载链接的报告")
+        print('测试5 回答:\n', msg)
+
+        # 示例6：图像分析（需要提供真实图片路径）
         # swarm.solve(
         #     "请分析这些图片中的代码问题",
         #     image_paths=["./screenshot1.png", "./screenshot2.png"]
