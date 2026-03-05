@@ -897,15 +897,17 @@ def start_email_poller(config: dict):
     """邮箱轮询主函数"""
     interval = config.get("check_interval", 60)
 
+    # 启动日志
+    trigger_keywords = config.get('trigger_keywords', [])
     print(f"📧 Email Poller 已启动（间隔 {interval} 秒）")
-    print(f"🎯 关键词: {config.get('email_keywords', [])}")
+    print(f"🎯 触发关键词（仅匹配主题，大小写不敏感）: {trigger_keywords}")
 
     def fetch_recent_unseen():
         """获取最近24小时未读邮件（终极增强版）"""
         try:
             mail = imaplib.IMAP4_SSL(config["imap_server"], 993)
 
-            # IMAP ID
+            # IMAP ID（保持不变）
             try:
                 tag = mail._new_tag()
                 mail.send(f'{tag} ID ("name" "MultiAgentSwarm" "version" "3.1" "vendor" "xAI")\r\n'.encode())
@@ -923,7 +925,6 @@ def start_email_poller(config: dict):
                 print(f"⚠️ IMAP ID 失败: {e}")
 
             mail.login(config["imap_user"], config["imap_pass"])
-
             status, message_count = mail.select('INBOX')
             if status != 'OK':
                 mail.logout()
@@ -947,7 +948,7 @@ def start_email_poller(config: dict):
             print(f"📬 找到 {len(mail_ids)} 封未读邮件")
 
             results = []
-            keywords = config.get('email_keywords', [])
+            keywords = [k.lower() for k in config.get('trigger_keywords', [])]
 
             for mail_id in mail_ids:
                 try:
@@ -969,10 +970,17 @@ def start_email_poller(config: dict):
 
                     from_header = msg.get('From', '')
 
-                    # 关键词过滤
-                    if keywords and not any(kw in subject or kw in from_header for kw in keywords):
-                        print(f"⏭️  跳过: {subject[:30]}")
+                    # ==================== 【核心修改】触发词过滤 ====================
+                    # 只检查 Subject + 大小写不敏感
+
+                    subject_lower = subject.lower()
+
+                    if keywords and not any(kw in subject_lower for kw in keywords):
+                        print(f"⏭️ 跳过（主题无触发词）: {subject[:50]}")
                         continue
+
+                    print(f"✅ 触发词匹配成功: {subject[:50]}")
+                    # ============================================================
 
                     # ============ 🔥 终极增强：正文提取 ============
                     body = ''

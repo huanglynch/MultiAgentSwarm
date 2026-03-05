@@ -34,6 +34,8 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 import glob
+from PIL import Image
+import io
 
 # ====================== 时间统计工具 ======================
 from contextlib import contextmanager
@@ -228,6 +230,46 @@ def run_python(code: str) -> str:
         return "⏱️ 执行超时（10秒）"
 
     return result_container["output"]
+
+
+# ====================== 🔥 图片预压缩（解决Token爆炸核心） ======================
+def compress_image_for_vision(image_path: str, max_side: int = 1024, quality: int = 85) -> str:
+    """
+    专为多模态LLM优化图片大小
+    - 最长边不超过1024px（视觉质量几乎无损）
+    - JPEG质量85（最佳性价比）
+    - 返回压缩后的base64字符串
+    """
+    try:
+        with Image.open(image_path) as img:
+            # 处理透明/调色板图片
+            if img.mode in ('RGBA', 'P', 'LA'):
+                img = img.convert('RGB')
+
+            # 保持比例缩放
+            w, h = img.size
+            if max(w, h) > max_side:
+                ratio = max_side / max(w, h)
+                new_size = (int(w * ratio), int(h * ratio))
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                print(f"   📏 图片已智能缩放: {w}x{h} → {new_size[0]}x{new_size[1]}")
+
+            # 高压缩保存到内存
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=quality, optimize=True)
+            compressed_bytes = buffer.getvalue()
+
+            original_kb = os.path.getsize(image_path) / 1024
+            compressed_kb = len(compressed_bytes) / 1024
+            print(
+                f"   📸 压缩完成: {original_kb:.1f}KB → {compressed_kb:.1f}KB (节省 {100 - compressed_kb / original_kb * 100:.0f}%)")
+
+            return base64.b64encode(compressed_bytes).decode('utf-8')
+
+    except Exception as e:
+        logging.warning(f"⚠️ 图片压缩失败 {image_path}: {e}，使用原图")
+        with open(image_path, "rb") as f:
+            return base64.b64encode(f.read()).decode('utf-8')
 
 
 # ====================== 向量记忆 ======================
@@ -1472,14 +1514,18 @@ class MultiAgentSwarm:
                     mime_type, _ = mimetypes.guess_type(path)
                     if not mime_type or not mime_type.startswith("image/"):
                         mime_type = "image/jpeg"
-                    with open(path, "rb") as f:
-                        base64_image = base64.b64encode(f.read()).decode('utf-8')
+
+                    # 🔥 关键优化：使用压缩后的base64（解决Token爆炸）
+                    base64_image = compress_image_for_vision(path, max_side=1024, quality=85)
+
                     image_content.append({
                         "type": "image_url",
                         "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}
                     })
+                    logging.info(f"✅ 图片已压缩并加载: {Path(path).name}")
+
                 except Exception as e:
-                    logging.error(f"  ❌ 读取图片失败 {path}: {e}")
+                    logging.error(f"  ❌ 读取/压缩图片失败 {path}: {e}")
             history.append({"speaker": "User", "content": image_content})
         else:
             history.append({"speaker": "User", "content": task})
