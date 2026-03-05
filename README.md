@@ -159,12 +159,13 @@ All features are hot-reloadable via WebUI `/api/config`.
 - **25+ Skills** + instant skill extension via `/skills/`
 - Persistent PrimalMemory + Vector DB across restarts
 - Full local model support (Ollama/vLLM or any OpenAI-compatible endpoint)
+- Email support
 
 ### 📁 Project Structure
 
 ```
 MultiAgentSwarm/
-├── webui.py                    # FastAPI + WebSocket + Feishu (main entry)
+├── webui.py                    # FastAPI + WebSocket + Feishu (main entry) + Email
 ├── multi_agent_swarm_v3.py     # Core swarm logic
 ├── skills/                     # 25+ ready skills + custom .py/.md
 ├── uploads/                    # Uploads + generated files (directly downloadable)
@@ -277,6 +278,7 @@ No GPU required. Model caching automatic. OpenSandbox optional (auto fallback).
 - `/uploads` 静态挂载 → **修改后的报告/Excel/PDF 可直接点击下载**  
 - 任务取消按钮 + 30秒心跳保活  
 - 完整**飞书官方 SDK 长连接** + 收到消息立即自动👍反应
+- 邮件交互
 
 **8. 🔒 OpenSandbox 双模式代码执行器**  
 - 已安装 → Docker 硬隔离（推荐）  
