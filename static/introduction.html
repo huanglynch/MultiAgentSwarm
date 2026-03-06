@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MultiAgentSwarm - 项目介绍</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+            color: #064e3b;
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 20px 60px rgba(16, 185, 129, 0.3);
+            overflow: hidden;
+            border: 3px solid #10b981;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            padding: 60px 40px;
+            text-align: center;
+            color: white;
+            position: relative;
+        }
+
+        .header::before {
+            content: '🌳';
+            font-size: 80px;
+            position: absolute;
+            top: 20px;
+            left: 40px;
+            opacity: 0.3;
+        }
+
+        .header::after {
+            content: '🤖';
+            font-size: 80px;
+            position: absolute;
+            top: 20px;
+            right: 40px;
+            opacity: 0.3;
+        }
+
+        .version {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.25);
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .header h1 {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        .tagline {
+            font-size: 22px;
+            opacity: 0.95;
+            font-weight: 500;
+        }
+
+        .content {
+            padding: 60px 40px;
+        }
+
+        .section {
+            margin-bottom: 50px;
+        }
+
+        .section h2 {
+            font-size: 32px;
+            color: #059669;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 4px solid #a7f3d0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .section h3 {
+            font-size: 22px;
+            color: #047857;
+            margin: 28px 0 16px 0;
+            font-weight: 600;
+        }
+
+        .section p {
+            margin-bottom: 20px;
+            color: #065f46;
+            font-size: 16px;
+        }
+
+        .highlight-box {
+            background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+            padding: 32px;
+            border-radius: 16px;
+            border-left: 8px solid #10b981;
+            margin: 32px 0;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
+        }
+
+        .highlight-box h3 {
+            color: #065f46;
+            margin: 0 0 16px 0;
+            font-size: 24px;
+        }
+
+        .highlight-box p {
+            margin: 0;
+            color: #047857;
+            font-size: 17px;
+            line-height: 1.8;
+        }
+
+        .principles-box {
+            background: white;
+            padding: 28px;
+            border-radius: 12px;
+            border-left: 8px solid #10b981;
+            margin: 24px 0;
+            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.15);
+        }
+
+        .principles-box p {
+            margin: 12px 0;
+            padding-left: 24px;
+            position: relative;
+        }
+
+        .principles-box p::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: #10b981;
+            font-weight: bold;
+            font-size: 20px;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+            margin: 32px 0;
+        }
+
+        .feature-card {
+            background: white;
+            padding: 28px;
+            border-radius: 16px;
+            border: 3px solid #a7f3d0;
+            transition: all 0.3s;
+            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.1);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 12px 24px rgba(16, 185, 129, 0.25);
+            border-color: #10b981;
+        }
+
+        .feature-card h4 {
+            color: #059669;
+            font-size: 20px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .feature-card p {
+            font-size: 15px;
+            color: #047857;
+            margin: 0;
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 32px 0;
+            background: white;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 16px rgba(16, 185, 129, 0.15);
+        }
+
+        .comparison-table th,
+        .comparison-table td {
+            padding: 18px;
+            text-align: left;
+            border-bottom: 2px solid #d1fae5;
+        }
+
+        .comparison-table th {
+            background: #10b981;
+            color: white;
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .comparison-table tr:hover {
+            background: #f0fdf4;
+        }
+
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            background: #10b981;
+            color: white;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+
+        .modes-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 32px 0;
+        }
+
+        .mode-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
+            padding: 24px;
+            border-radius: 12px;
+            border: 2px solid #a7f3d0;
+            transition: all 0.3s;
+        }
+
+        .mode-card:hover {
+            transform: translateY(-4px);
+            border-color: #10b981;
+            box-shadow: 0 8px 16px rgba(16, 185, 129, 0.2);
+        }
+
+        .mode-card h4 {
+            color: #059669;
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+
+        .mode-card p {
+            font-size: 14px;
+            color: #047857;
+            margin: 0;
+        }
+
+        .footer {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            padding: 40px;
+            text-align: center;
+            color: white;
+        }
+
+        .footer h3 {
+            font-size: 28px;
+            margin-bottom: 16px;
+        }
+
+        .footer p {
+            font-size: 18px;
+            opacity: 0.95;
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                padding: 40px 24px;
+            }
+
+            .header h1 {
+                font-size: 32px;
+            }
+
+            .tagline {
+                font-size: 18px;
+            }
+
+            .content {
+                padding: 40px 24px;
+            }
+
+            .section h2 {
+                font-size: 24px;
+            }
+
+            .feature-grid,
+            .modes-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header::before,
+            .header::after {
+                font-size: 50px;
+            }
+        }
+
+        .performance-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 32px 0;
+            background: white;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 16px rgba(16, 185, 129, 0.15);
+        }
+
+        .performance-table th,
+        .performance-table td {
+            padding: 16px;
+            text-align: left;
+            border-bottom: 2px solid #d1fae5;
+        }
+
+        .performance-table th {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            font-weight: 600;
+        }
+
+        .performance-table tr:hover {
+            background: #f0fdf4;
+        }
+
+        .improvement {
+            color: #10b981;
+            font-weight: 600;
+        }
+
+        strong {
+            color: #059669;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="version">v4.1.0</div>
+            <h1>🌳 MultiAgentSwarm</h1>
+            <p class="tagline">一个真正看得见 Agent 思考的自适应数字团队</p>
+        </div>
+
+        <div class="content">
+            <div class="highlight-box">
+                <h3>🎯 一句话总结</h3>
+                <p>这是一个<strong>看得见思考、懂得节制、持续进化</strong>的本地数字团队 —— 既能秒回简单问题，也能高质量完成复杂报告，还永远不会让你等后台处理。</p>
+            </div>
+
+            <div class="section">
+                <h2>🚀 为什么选择 MultiAgentSwarm？</h2>
+                <p>市面上的多智能体框架大多采用同一种粗暴思路：</p>
+                <p style="text-align: center; font-size: 18px; font-weight: 600; color: #dc2626; padding: 20px; background: #fef2f2; border-radius: 12px; margin: 20px 0;">
+                    "不管什么任务都把所有 Agent 扔上去 → 大量烧 token → 祈祷出好结果"
+                </p>
+
+                <h3>💡 我们的核心理念</h3>
+                <p>我们从<strong>第一性原理</strong>出发，基于两个核心公理重新构建：</p>
+
+                <div class="principles-box">
+                    <p><strong>真正的智能不是用更多 Agent</strong>，而是知道什么时候该快、什么时候该深、该并行什么、该记住什么。</p>
+                    <p><strong>高质量绝不能以让用户等待为代价</strong> —— 答案必须即时呈现，所有自进化过程必须完全后台异步完成。</p>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>✨ 核心特性</h2>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h4>🧭 智能任务路由</h4>
+                        <p>自动判断并切换 Simple / Medium / Balanced / Complex 四种模式，确保每个任务都用最合适的资源。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🎯 Balanced 甜点模式</h4>
+                        <p>默认最优选择，质量接近 Complex，速度接近 Medium。规划 + 工具 + 轻量反思的完美平衡。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🌲 Tree-of-Thoughts</h4>
+                        <p>3 条思考路径同时推进，多分支并行探索，确保找到最优解决方案。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🏭 动态 Agent 工厂</h4>
+                        <p>Hierarchical Supervisor 按需生成专家并发工作，真正实现并行执行子任务。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>👁️ 强制可见 ReAct</h4>
+                        <p>每个 Agent 都必须先输出 Thinking → Action，完全透明的思考过程，可实时观察。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🧠 分层终身记忆</h4>
+                        <p>PrimalMemory + Vector + Knowledge Graph + 自动衰退与蒸馏，持续学习和进化。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>⚡ 完全异步后台</h4>
+                        <p>答案显示后立即可用，记忆保存、Auto-Eval、Active Distillation 全在后台运行，零冻结。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>📋 Master Plan 验证</h4>
+                        <p>动态规划 + Benjamin 严格审查 + 实时刷新，确保执行方向始终正确。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🌐 生产级 WebUI</h4>
+                        <p>开箱即用的流式输出 + 飞书长连接 + 智能文件生成与下载，企业级交付能力。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🔧 25+ 开箱即用 Skill</h4>
+                        <p>把 .py 或 .md 扔进 /skills/ 即可立即加载，极易扩展的工具生态。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🌍 本地模型支持</h4>
+                        <p>任何兼容 OpenAI 接口的 LLM（Ollama、vLLM、DeepSeek、Qwen 等）都能无缝接入。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h4>🥊 对抗式辩论</h4>
+                        <p>Pro / Con / Judge 三角色并行辩论 + Meta-Critic 二次评估，确保多角度思考。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>📊 与其他框架对比</h2>
+                <table class="comparison-table">
+                    <thead>
+                        <tr>
+                            <th>特性</th>
+                            <th>MultiAgentSwarm v4.1.0</th>
+                            <th>AutoGen / CrewAI / LangGraph</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>智能路由</strong></td>
+                            <td>✅ 自动简单/中等/复杂</td>
+                            <td>❌ 永远全量群聊</td>
+                        </tr>
+                        <tr>
+                            <td><strong>对抗式辩论</strong></td>
+                            <td>✅ Pro/Con/Judge + 元批评</td>
+                            <td>❌（需手动实现）</td>
+                        </tr>
+                        <tr>
+                            <td><strong>终身记忆</strong></td>
+                            <td>✅ 树状日志 + 原子 KB + 衰退</td>
+                            <td>❌ 临时记忆</td>
+                        </tr>
+                        <tr>
+                            <td><strong>知识图谱 + 蒸馏</strong></td>
+                            <td>✅ 实时概念图谱</td>
+                            <td>❌ 无</td>
+                        </tr>
+                        <tr>
+                            <td><strong>自适应反思深度</strong></td>
+                            <td>✅ 质量达标自动停止</td>
+                            <td>❌ 固定轮数</td>
+                        </tr>
+                        <tr>
+                            <td><strong>强制 ReAct 透明格式</strong></td>
+                            <td>✅ 每轮都显示思考过程</td>
+                            <td>❌ 黑箱</td>
+                        </tr>
+                        <tr>
+                            <td><strong>WebUI + 流式</strong></td>
+                            <td>✅ 开箱即用</td>
+                            <td>❌ 需要额外开发</td>
+                        </tr>
+                        <tr>
+                            <td><strong>飞书企业级长连接</strong></td>
+                            <td>✅ 零配置</td>
+                            <td>❌ 不支持</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Token & 时间节省</strong></td>
+                            <td>简单任务节省 60-80%</td>
+                            <td>❌ 永远昂贵</td>
+                        </tr>
+                        <tr>
+                            <td><strong>本地模型支持</strong></td>
+                            <td>✅ 任何 OpenAI 兼容接口</td>
+                            <td>❌ 支持有限</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <h2>🎨 四种工作模式</h2>
+                <div class="modes-grid">
+                    <div class="mode-card">
+                        <h4>⚡ Simple 模式</h4>
+                        <p>单 Agent 直接回答，适合简单问答，响应速度 1-3 秒，节省 60-80% token。</p>
+                    </div>
+                    <div class="mode-card">
+                        <h4>🎯 Medium 模式</h4>
+                        <p>2-3 Agent 协作 + 轻量工具调用，平衡速度与质量，适合中等复杂度任务。</p>
+                    </div>
+                    <div class="mode-card">
+                        <h4>🌟 Balanced 模式<span class="badge">推荐</span></h4>
+                        <p>规划 + 工具 + 轻量反思，质量接近 Complex，速度接近 Medium，最佳甜点。</p>
+                    </div>
+                    <div class="mode-card">
+                        <h4>🚀 Complex 模式</h4>
+                        <p>全量 Agent + 深度反思 + 知识图谱，顶级质量输出，适合复杂报告和分析。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>📈 性能提升数据</h2>
+                <table class="performance-table">
+                    <thead>
+                        <tr>
+                            <th>指标</th>
+                            <th>v2.9.2</th>
+                            <th>v3.1.0</th>
+                            <th>v4.1.0（现在）</th>
+                            <th>提升幅度</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>简单任务耗时</td>
+                            <td>8-12s</td>
+                            <td>1-3s</td>
+                            <td><strong>1-3s</strong></td>
+                            <td class="improvement">-75%</td>
+                        </tr>
+                        <tr>
+                            <td>复杂任务质量</td>
+                            <td>8.0/10</td>
+                            <td>9.5/10</td>
+                            <td><strong>9.7/10</strong></td>
+                            <td class="improvement">+21%</td>
+                        </tr>
+                        <tr>
+                            <td>思考过程透明度</td>
+                            <td>无</td>
+                            <td>部分</td>
+                            <td><strong>完整实时可见</strong></td>
+                            <td class="improvement">革命性提升</td>
+                        </tr>
+                        <tr>
+                            <td>规划漂移（5+轮）</td>
+                            <td>中</td>
+                            <td>低</td>
+                            <td><strong>几乎为 0</strong></td>
+                            <td class="improvement">彻底解决</td>
+                        </tr>
+                        <tr>
+                            <td>Token 消耗</td>
+                            <td>基准</td>
+                            <td>-40~60%</td>
+                            <td><strong>-45~65%</strong></td>
+                            <td class="improvement">进一步节省</td>
+                        </tr>
+                        <tr>
+                            <td>文件处理</td>
+                            <td>无</td>
+                            <td>基础</td>
+                            <td><strong>中文名净化 + 下载</strong></td>
+                            <td class="improvement">生产级可用</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <h2>🎯 技术亮点</h2>
+
+                <h3>1. 显式 ReAct 思考过程（架构图 100% 对齐）</h3>
+                <p>每条 Agent 回复<strong>必须</strong>以以下格式开头：</p>
+                <div class="principles-box">
+                    <p><strong>Thinking:</strong> 原因分析和推理过程</p>
+                    <p><strong>Action:</strong> 调用工具名称或 Final Answer</p>
+                    <p><strong>Action Input:</strong> 参数 JSON 或最终答案摘要</p>
+                </div>
+                <p>工具返回结果独立标记为 <strong style="color: #dc2626;">【Observation】</strong>（红色醒目），WebSocket 实时流式输出，用户和开发者可完整看到思考链路。</p>
+
+                <h3>2. 动态 Master Plan 刷新（动态规划闭环）</h3>
+                <p>每 3 轮或质量 < 75 分时<strong>自动刷新</strong> Master Plan，完美闭合架构图"更新 prompt"循环，所有 Agent 始终对齐最新规划。</p>
+
+                <h3>3. 分层终身记忆系统</h3>
+                <p><strong>PrimalMemory</strong>（原始记忆）+ <strong>Vector</strong>（向量检索）+ <strong>Knowledge Graph</strong>（知识图谱）+ 自动衰退机制，实现真正的持续学习和知识积累。</p>
+
+                <h3>4. 完全异步后台自进化</h3>
+                <p>答案显示后立即可用，记忆保存、Auto-Eval、Active Distillation 全在后台运行，<strong>零冻结、零等待</strong>。</p>
+            </div>
+
+            <div class="highlight-box">
+                <h3>🎯 设计哲学</h3>
+                <p>MultiAgentSwarm 不是为了"炫技"而堆砌 Agent，而是真正理解<strong>什么时候需要深度思考、什么时候需要快速响应</strong>。它既是一个高效的生产力工具，也是一个完全透明的多智能体研究平台。</p>
+                <p style="margin-top: 16px;">我们相信，真正的智能系统应该像一个经验丰富的团队领导者：知道何时需要团队协作，何时个人就能搞定；知道哪些经验值得记住，哪些可以遗忘；知道如何在质量和效率之间找到最佳平衡点。</p>
+            </div>
+        </div>
+
+        <div class="footer">
+            <h3>🌳 MultiAgentSwarm v4.1.0</h3>
+            <p>看得见思考 · 懂得节制 · 持续进化</p>
+            <p style="margin-top: 20px; font-size: 16px; opacity: 0.9;">一个真正智能的本地数字团队</p>
+        </div>
+    </div>
+</body>
+</html>

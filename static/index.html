@@ -198,6 +198,20 @@
         .btn-theme:hover {
             background: var(--accent-hover);
         }
+        .btn-about {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-about:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+        }
         .btn-settings { background: var(--bg-tertiary); color: var(--text-secondary); }
         .btn-settings:hover { background: var(--border-color); }
         .btn-export { background: #10b981; color: white; }
@@ -612,11 +626,11 @@
                 max-width: 90%;
             }
         }
-        /* ==================== 上传按钮和发送按钮宽度减少 1/4 ==================== */
+
         #sendBtn,
         .action-btn.upload-btn {
-            min-width: 90px !important;     /* 原 120px → 90px（缩小 25%） */
-            padding: 15px 18px !important;  /* 左右内边距同步优化，更协调 */
+            min-width: 90px !important;
+            padding: 15px 18px !important;
         }
     </style>
 </head>
@@ -635,6 +649,7 @@
             <div class="chat-header">
                 <h1>💬 MultiAgentSwarm</h1>
                 <div class="header-buttons">
+                    <a href="introduction.html" target="_blank" class="btn-about">📖 项目介绍</a>
                     <button class="btn-theme" onclick="showThemeSelector()">🎨 主题</button>
                     <button class="btn-settings" onclick="toggleSettings()">⚙️ 设置</button>
                     <button class="btn-export" onclick="exportChat()">💾 导出</button>
@@ -788,7 +803,6 @@
         let heartbeatInterval = null;
         let currentTheme = 'current';
 
-        // 配置 Marked.js
         marked.setOptions({
             breaks: true,
             gfm: true,
@@ -796,36 +810,28 @@
             mangle: false
         });
 
-        // ==================== 主题切换功能 ====================
         function switchTheme(theme) {
             currentTheme = theme;
-
-            // 更新主题选择器UI
-            document.querySelectorAll('.theme-option').forEach(option => {
+            document.querySelectorAll('.theme-option').forEach(function(option) {
                 option.classList.remove('active');
             });
-            document.querySelector(`[data-theme="${theme}"]`).classList.add('active');
+            document.querySelector('[data-theme="' + theme + '"]').classList.add('active');
 
-            // 应用主题
             if (theme === 'current') {
                 document.documentElement.removeAttribute('data-theme');
             } else {
                 document.documentElement.setAttribute('data-theme', theme);
             }
-
-            // 保存主题偏好
             localStorage.setItem('preferred-theme', theme);
         }
 
         function showThemeSelector() {
             toggleSettings();
-            // 滚动到主题选择区域
-            setTimeout(() => {
+            setTimeout(function() {
                 document.querySelector('.theme-selector').scrollIntoView({ behavior: 'smooth', block: 'center' });
             }, 300);
         }
 
-        // 加载保存的主题
         function loadSavedTheme() {
             const savedTheme = localStorage.getItem('preferred-theme');
             if (savedTheme) {
@@ -833,7 +839,6 @@
             }
         }
 
-        // ==================== 文件上传逻辑 ====================
         async function handleFileUpload(event) {
             const files = event.target.files;
             const uploadedFilesDiv = document.getElementById('uploadedFiles');
@@ -885,7 +890,6 @@
             return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
         }
 
-        // ==================== WebSocket 连接（增强心跳保活）====================
         function connectWebSocket() {
             if (ws) ws.close();
 
@@ -959,7 +963,6 @@
             };
         }
 
-        // ==================== 发送消息 ====================
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             const message = input.value.trim();
@@ -1040,7 +1043,6 @@
             }
         }
 
-        // ==================== 添加思考日志 ====================
         function addThinkingLog(logContent) {
             if (!thinkingDetailsElement) {
                 const messagesDiv = document.getElementById('messages');
@@ -1069,7 +1071,6 @@
             }, 0);
         }
 
-        // ==================== 更新流式消息 ====================
         function updateStreamingMessage(agent, content) {
             if (!currentStreamingDiv || currentStreamingAgent !== agent) {
                 const messagesDiv = document.getElementById('messages');
@@ -1100,7 +1101,6 @@
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
-        // ==================== 完成流式消息 ====================
         function finalizeStreamingMessage() {
             if (currentStreamingDiv) {
                 const actionsDiv = document.createElement('div');
@@ -1120,7 +1120,6 @@
             }
         }
 
-        // ==================== 添加消息 ====================
         function addMessage(role, content) {
             const messagesDiv = document.getElementById('messages');
             const messageDiv = document.createElement('div');
@@ -1183,7 +1182,6 @@
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
 
-        // ==================== 改进版复制函数（修复版）====================
         function copyMessage(btn) {
             const messageContent = btn.closest('.message-content');
             if (!messageContent) return;
@@ -1423,7 +1421,7 @@
         }
 
         document.addEventListener('DOMContentLoaded', async function() {
-            loadSavedTheme(); // 加载保存的主题
+            loadSavedTheme();
             await loadConfig();
             await loadSessions();
             createNewSession();
