@@ -1,7 +1,7 @@
-# MultiAgentSwarm v3.2.0 (ReAct Visualization Edition)
+# MultiAgentSwarm v4.1.0 (ReAct Visualization Edition)
 **Self-Adaptive Digital Team**  
-**Enterprise-grade Multi-Agent Collaboration Framework with Full ReAct Visibility**  
-**唯一真正“看得见每个 Agent 在想什么”的多智能体系统**
+**A fully visible, self-evolving ReAct Digital Team** that intelligently decides *when to be fast* and *when to go deep*.
+**MultiAgentSwarm v4.1.0** 不再是简单的“多个LLM并行聊天”，而是一个**完全可视化、智能决策、自进化 ReAct 数字团队** —— 它完美还原经典 ReAct 架构，同时注入群体智能、动态规划、分层终身记忆与生产级交付能力。
 
 <p align="center">
   <strong>
