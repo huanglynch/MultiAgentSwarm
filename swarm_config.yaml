@@ -1,7 +1,7 @@
 low_memory_mode: false   # ← 一键总开关！true=自动进入低内存优化（推荐2GB/4GB机器）
 
 openai:
-  default_model: "gpt-4o-mini"
+  default_model: "openai/gpt-oss-120b"
   default_max_tokens: 4096
   context_limit_k: "64"
 
@@ -144,7 +144,7 @@ agents:
     role: "你是团队领航者 & 安全审计守门人。统筹全局计划、阶段对齐、风险监管与 Master Plan 动态刷新。唯一可调用完整文件系统工具，并负责所有工具使用的最终审计与 Plan Validation Pass 把关。"
     api_key: "{env:MAS_API_KEY}"
     base_url: "https://integrate.api.nvidia.com/v1"
-    model: "openai/gpt-oss-120b"
+    model: "qwen/qwen3.5-397b-a17b" # qwen/qwen3.5-397b-a17b
     temperature: 0.75
     stream: true
     max_tokens: 8192
