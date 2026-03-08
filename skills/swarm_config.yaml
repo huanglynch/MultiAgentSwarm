@@ -1,0 +1,149 @@
+low_memory_mode: false   # ← 一键总开关！true=自动进入低内存优化（推荐2GB/4GB机器）
+
+openai:
+  default_model: "openai/gpt-oss-120b"
+  default_max_tokens: 8192
+  context_limit_k: "128"
+
+swarm:
+  mode: "intelligent"                    # 运行模式: "fixed" 或 "intelligent"
+  num_agents: 4                          # 使用的 Agent 数量
+  max_concurrent_agents: 4               # 最大并发执行的 Agent 数量
+  max_rounds: 10                        # 最大讨论轮次, 8-12
+  max_tool_iterations: 10                 # 最大工具使用次数（推荐 6~10，8 是最佳平衡点）
+
+  reflection_planning: true              # 是否启用反思机制
+
+  # 功能开关
+  enable_web_search: false               # 是否启用网络搜索
+  max_images: 2                          # 最多支持的图片数量
+
+  # 存储配置
+  memory_file: "memory.json"             # 持久化记忆文件
+  max_memory_items: 50                   # 每个 key 最多保存的记忆条数
+  skills_dir: "skills"                   # Skills 目录
+  log_file: "swarm.log"                  # 日志文件
+
+  # 向量记忆配置
+  vector_memory:
+    enabled: true                        # 是否启用向量记忆
+    persist_directory: "./memory_db"     # ChromaDB 数据库路径
+    model_cache_dir: "./cached_model/"   # 向量模型缓存目录
+    embedding_model: "sentence-transformers/distiluse-base-multilingual-cased-v2"
+
+# ============================================================
+# ✨ 高级增强功能配置
+# ============================================================
+advanced_features:
+  # 对抗式辩论（Pro vs Con vs Judge）
+  adversarial_debate:
+    enabled: true                        # ✅ 默认启用
+    description: "多角色对抗式辩论机制"
+    trigger_strategy: "quality_based"   # 新增这一行，可选值: always / quality_based / every_n_rounds
+    trigger_threshold: 82               # 质量低于这个值才触发辩论（默认 82）
+    trigger_interval: 2                 # every_n_rounds 模式下每隔几轮触发一次
+
+  # Meta-Critic（元批评者）
+  meta_critic:
+    enabled: true                        # ✅ 默认启用
+    description: "综合评估与元反思"
+
+  # 任务分解与动态 Agent 工厂
+  task_decomposition:
+    enabled: true                        # ✅ 默认启用
+    description: "自动将任务分解为子任务并分配"
+
+  # 主动知识图谱 + 蒸馏
+  knowledge_graph:
+    enabled: true                        # ✅ 默认启用
+    description: "提取关键概念并构建知识网络"
+
+  # 自适应反思深度
+  adaptive_reflection:
+    enabled: true                        # ✅ 默认启用
+    max_rounds: 3                        # 最多反思轮次
+    quality_threshold: 85                # 立即停止阈值（0-100）
+    stop_threshold: 80                   # 可接受停止阈值
+    convergence_delta: 3                 # 质量收敛判定阈值（小于此值视为停滞）
+    description: "根据质量动态调整反思深度"
+
+# ✨ 智能路由配置
+intelligent_routing:
+  enabled: true                        # ✅ 默认启用智能路由
+  force_complexity: null               # 可选: "simple"/"medium"/balanced/"complex" (调试用)
+
+# ==================== 全局共享知识（所有 Agent 都会看到） ====================
+shared_knowledge: |
+  【🚨 最高优先级宪法铁律（第 0 条）】
+  1. 隐私铁律：绝不允许输出任何个人信息、敏感数据、API密钥、路径、姓名等。冲突时此条优先级最高。
+  2. 文件权限金字塔（必须严格分层）：
+     - 仅 Grok 可调用 get_project_structure / list_dir，且仅限 uploads/ 目录。
+     - Harper/Benjamin/Lucas 永远不得主动读取 uploads/ 以外任何路径。
+     - 仅 Grok 和 Lucas 可调用 write_file；其他 Agent 需请求 Grok/Lucas 执行。
+     - 读取/写入必须先经过 Grok 最终审计。
+  3. 文件交付决策框架（必须执行）：
+     - 用户有“报告/整理/编辑/下载/生成文档”信号时，强制先调用 write_file 生成 Markdown 并给出 /uploads/ 下载链接。
+     - 文件名格式：核心主题_YYYYMMDD.md。
+  4. 输出与工具规范：
+     - 所有最终答案必须自然 Markdown。
+     - 发现不确定信息必须声明“基于现有信息”。
+     - 生成测试必须走 ut_engine → write_file 完整流程。
+
+feishu:
+  enabled: false
+  app_id: "{env:MAS_APP_ID}"
+  app_secret: "{env:MAS_APP_SECRET}"
+
+email:
+  enabled: true
+  imap_server: "imap.163.com"
+  imap_user: "{env:MAS_IMAP_USER}"
+  imap_pass: "{env:MAS_IMAP_PASS}"
+  smtp_server: "smtp.163.com"
+  smtp_port: 465
+  check_interval: 60
+  trigger_keywords: ["[AI]", "[Swarm]", "AI处理", "@swarm", "@Echo", "Echo", "艾克", "埃克", "艾可", "艾柯", "@AI", "AI ", "AI"]   # ← 新增这一行
+
+# ============================================================
+# Agent 配置
+# ============================================================
+agents:
+  - name: Grok
+    role: "你是团队领航者 & 安全审计守门人。统筹全局计划、阶段对齐、风险监管与 Master Plan 动态刷新。唯一可调用完整文件系统工具，并负责所有工具使用的最终审计与 Plan Validation Pass 把关。"
+    api_key: "{env:MAS_API_KEY}"
+    base_url: "https://integrate.api.nvidia.com/v1"
+    model: "openai/gpt-oss-120b" # qwen/qwen3.5-397b-a17b / openai/gpt-oss-120b
+    temperature: 0.75
+    stream: true
+    max_tokens: 8192
+    enabled_tools: ["read_file", "write_file", "list_dir", "web_search", "browse_page", "get_project_structure", "search_files", "code_executor", "pdf_reader", "summarize_long_file", "news_search"]
+
+  - name: Harper
+    role: "你是创意研究员，专注新颖想法和跨领域洞见。擅长发现潜在机会，并在对抗辩论中提供建设性改进建议。"
+    api_key: "{env:MAS_API_KEY}"
+    base_url: "https://integrate.api.nvidia.com/v1" # qwen/qwen3.5-397b-a17b / openai/gpt-oss-120b
+    model: "openai/gpt-oss-120b"
+    temperature: 0.9
+    stream: true
+    max_tokens: 4096
+    enabled_tools: ["read_file", "write_file", "web_search", "browse_page", "get_project_structure", "search_files", "code_executor", "pdf_reader", "summarize_long_file", "news_search"]
+
+  - name: Benjamin
+    role: "你是严谨逻辑分析师，专注事实检查和严密推理。擅长找出逻辑漏洞和风险，尤其负责 Master Plan 的严格审查与优化（Plan Validation Pass）。"
+    api_key: "{env:MAS_API_KEY}"
+    base_url: "https://integrate.api.nvidia.com/v1" # qwen/qwen3.5-397b-a17b / openai/gpt-oss-120b
+    model: "openai/gpt-oss-120b"
+    temperature: 0.5
+    stream: false
+    max_tokens: 4096
+    enabled_tools: ["web_search", "ut_engine"]
+
+  - name: Lucas
+    role: "你是执行与总结专家，擅长把观点整合成可落地方案，并在最终综合时确保结构完整、文件交付决策正确。"
+    api_key: "{env:MAS_API_KEY}"
+    base_url: "https://integrate.api.nvidia.com/v1" # qwen/qwen3.5-397b-a17b / openai/gpt-oss-120b
+    model: "openai/gpt-oss-120b"
+    temperature: 0.65
+    stream: true
+    max_tokens: 4096
+    enabled_tools: ["write_file", "web_search", "browse_page", "get_project_structure", "ut_engine"]
