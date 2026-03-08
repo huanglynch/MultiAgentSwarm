@@ -433,6 +433,28 @@ class VectorMemory:
 
         return ""
 
+    def reset(self, confirm: bool = False):
+        """彻底清空 VectorMemory（生产必备的安全重置）"""
+        if not confirm:
+            print("⚠️ VectorMemory.reset() 需要 confirm=True 才能执行")
+            logging.warning("VectorMemory 重置被拒绝（缺少 confirm=True）")
+            return False
+
+        try:
+            if self.collection:
+                self.client.delete_collection("swarm_memory")
+                self.collection = self.client.create_collection(
+                    name="swarm_memory",
+                    metadata={"description": "Agent memory storage"}
+                )
+            print("🧹 VectorMemory 已完全重置（所有历史记忆清空）")
+            logging.info("🧹 VectorMemory 已完全重置")
+            return True
+        except Exception as e:
+            logging.error(f"VectorMemory 重置失败: {e}")
+            print(f"❌ 重置失败: {e}")
+            return False
+
 
 class PrimalMemory:
     """PrimalClaw极简版：树状日志 + 原子KB + 衰退 + 完整QMD检索（已优化）"""
@@ -1251,6 +1273,13 @@ class MultiAgentSwarm:
         # ====================== ✨ 新增：Dynamic Agent Factory + Supervisor ======================
         self.temporary_agents: List[Agent] = []  # ← 新增这一行
         self.subtask_status: Dict = {}  # Supervisor 监控用
+
+    def reset_vector_memory(self, confirm: bool = False):
+        """对外暴露的简单重置接口"""
+        if self.vector_memory:
+            return self.vector_memory.reset(confirm=confirm)
+        print("⚠️ VectorMemory 未启用")
+        return False
 
     def create_dynamic_agent(self, subtask: Dict) -> Agent:
         """最小改动动态创建临时Agent（复用现有Agent类）"""
