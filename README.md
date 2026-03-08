@@ -69,7 +69,7 @@ A local swarm that feels like a real team:
 
 ---
 
-### ✨ Key Features (v3.2.0)
+### ✨ Key Features (v4.1.0)
 
 **1. 🧭 Full ReAct Visualization (Core of v3.2.0)**  
 - Every agent response **must** begin with:  
@@ -141,7 +141,7 @@ uv pip install -r requirements.txt
 
 ---
 
-**CLI test**: `python multi_agent_swarm_v3.py`
+**CLI test**: `python multi_agent_swarm_v4.py`
 ---
 
 
@@ -358,7 +358,7 @@ python webui.py
 
 **CLI 测试**  
 ```bash
-python multi_agent_swarm_v3.py
+python multi_agent_swarm_v4.py
 ```
 
 ---
