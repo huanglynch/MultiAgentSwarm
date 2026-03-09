@@ -697,18 +697,14 @@ class Agent:
         self.knowledge_graph = knowledge_graph
         self.context_limit_k = context_limit_k  # ← 新增这一行，保存下来
 
-        # OpenAI 客户端配置
-        # self.client = OpenAI(
-        #     api_key=config.get("api_key"),
-        #     base_url=config.get("base_url")
-        # )
-        # OpenAI 客户端配置 - 支持 {env:XXX} 安全读取（最小改动）
         resolved_key = resolve_env_var(config.get("api_key"))
+        resolved_base = resolve_env_var(config.get("base_url"))
+        resolved_model = resolve_env_var(config.get("model"))
         self.client = OpenAI(
             api_key=resolved_key,
-            base_url=config.get("base_url")
+            base_url=resolved_base
         )
-        self.model = config.get("model", default_model)
+        self.model = resolved_model or config.get("model", default_model)
         self.temperature = config.get("temperature", 0.7)
         self.stream = config.get("stream", False)
         self.max_tokens = config.get("max_tokens", default_max_tokens)
@@ -1107,15 +1103,13 @@ class MultiAgentSwarm:
 
         # OpenAI 配置
         oai = cfg.get("openai", {})
-        self.default_model = oai.get("default_model", "gpt-4o-mini")
+        self.default_model = resolve_env_var(oai.get("default_model", "gpt-4o-mini"))
         self.default_max_tokens = oai.get("default_max_tokens", 4096)
         self.context_limit_k = oai.get("context_limit_k", "64")
 
         # Swarm 配置
         swarm = cfg.get("swarm", {})
         self.mode = swarm.get("mode", "fixed")
-        # self.max_rounds = swarm.get("max_rounds", 3 if self.mode == "fixed" else 10)
-        # 根据上下文限制动态轮次（64K时保守，128K时激进）
         #self.max_rounds = 8 if "64" in str(self.context_limit_k) else 12  # 或者读配置
         # 根据上下文限制动态轮次（64K时保守，128K时激进）——支持low_memory_mode覆盖
         self.max_rounds = swarm.get("max_rounds",
@@ -1205,6 +1199,23 @@ class MultiAgentSwarm:
                 }
             }
             logging.info("✅ 已启用网络搜索工具")
+
+        # ====================== Skill 热重载内置工具 ======================
+        self.tool_registry["reload_skills"] = {
+            "func": self.reload_skills,
+            "schema": {
+                "type": "function",
+                "function": {
+                    "name": "reload_skills",
+                    "description": "热重载 skills/ 目录下的所有 Skill（包括刚刚用 skill_generator 生成的新工具）。无需重启 Swarm，立即可用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
+            }
+        }
+        logging.info("✅ 已注册 Skill 热重载工具（reload_skills）")
 
         # 初始化持久化记忆
         self.memory = self._load_memory()
@@ -1413,6 +1424,34 @@ class MultiAgentSwarm:
     """
         print(banner)
         logging.info(banner)
+
+    def reload_skills(self):
+        """优雅热重载 Skills - 无需重启 Swarm（生产级推荐）"""
+        logging.info("🔄 [Skill 热重载] 正在扫描 skills/ 目录...")
+        old_count = len(self.tool_registry)
+
+        # 重新加载（完全复用你原来的函数）
+        self.tool_registry, self.shared_knowledge = load_skills(self.skills_dir)
+
+        # 更新所有现有 Agent（包括动态创建的临时 Agent）
+        for agent in self.agents + getattr(self, 'temporary_agents', []):
+            # 保留该 Agent 原来启用的工具列表
+            enabled = list(agent.tool_map.keys()) if hasattr(agent, 'tool_map') and agent.tool_map else []
+            agent.tools = [
+                self.tool_registry[name]["schema"]
+                for name in enabled if name in self.tool_registry
+            ]
+            agent.tool_map = {
+                name: self.tool_registry[name]["func"]
+                for name in enabled if name in self.tool_registry
+            }
+            agent.shared_knowledge = self.shared_knowledge  # 同步最新共享知识
+
+        new_count = len(self.tool_registry)
+        msg = f"✅ [Skill 热重载] 完成！工具数量 {old_count} → {new_count}（新 Skill 已就绪）"
+        logging.info(msg)
+        print(msg)
+        return msg
 
     def _load_memory(self) -> Dict:
         """加载持久化记忆"""
