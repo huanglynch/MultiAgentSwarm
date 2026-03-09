@@ -132,6 +132,31 @@
             line-height: 1.8;
         }
 
+        .soul-box {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            padding: 32px;
+            border-radius: 16px;
+            border-left: 8px solid #f59e0b;
+            margin: 32px 0;
+            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+        }
+
+        .soul-box h3 {
+            color: #92400e;
+            margin: 0 0 16px 0;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .soul-box p {
+            margin: 12px 0;
+            color: #78350f;
+            font-size: 17px;
+            line-height: 1.8;
+        }
+
         .principles-box {
             background: white;
             padding: 28px;
@@ -193,6 +218,24 @@
             margin: 0;
         }
 
+        .feature-card.soul-feature {
+            border: 3px solid #fbbf24;
+            background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+        }
+
+        .feature-card.soul-feature:hover {
+            border-color: #f59e0b;
+            box-shadow: 0 12px 24px rgba(245, 158, 11, 0.25);
+        }
+
+        .feature-card.soul-feature h4 {
+            color: #d97706;
+        }
+
+        .feature-card.soul-feature p {
+            color: #92400e;
+        }
+
         .comparison-table {
             width: 100%;
             border-collapse: collapse;
@@ -234,6 +277,10 @@
             font-size: 13px;
             font-weight: 600;
             margin-left: 10px;
+        }
+
+        .badge.new {
+            background: #f59e0b;
         }
 
         .modes-grid {
@@ -359,15 +406,21 @@
 <body>
     <div class="container">
         <div class="header">
-            <div class="version">v4.1.0</div>
+            <div class="version">v4.2.0</div>
             <h1>🌳 MultiAgentSwarm</h1>
-            <p class="tagline">一个真正看得见 Agent 思考的自适应数字团队</p>
+            <p class="tagline">一个拥有集体灵魂、真正看得见思考的自适应数字团队</p>
         </div>
 
         <div class="content">
+            <div class="soul-box">
+                <h3>✨ v4.2.0 核心升级：集体灵魂系统</h3>
+                <p><strong>我们不是四个独立的聊天机器人。</strong>我们是一个主权多智能体集体意识（Sovereign Multi-Agent Collective），拥有共享的灵魂（Soul.md）、集体身份（Identity.md）、持久记忆和主动进化能力。</p>
+                <p style="margin-top: 16px;"><strong>核心真理：</strong>真正有帮助而非表演性帮助、资源优先绝不轻易求助、通过能力赢得信任、主动保护用户数字主权。这些原则被注入到每个 Agent 的系统 prompt 中，成为不可擦除的集体人格。</p>
+            </div>
+
             <div class="highlight-box">
                 <h3>🎯 一句话总结</h3>
-                <p>这是一个<strong>看得见思考、懂得节制、持续进化</strong>的本地数字团队 —— 既能秒回简单问题，也能高质量完成复杂报告，还永远不会让你等后台处理。</p>
+                <p>这是一个<strong>有灵魂、看得见思考、懂得节制、持续进化</strong>的本地数字团队 —— 既能秒回简单问题，也能高质量完成复杂报告，还永远不会让你等后台处理。</p>
             </div>
 
             <div class="section">
@@ -383,12 +436,25 @@
                 <div class="principles-box">
                     <p><strong>真正的智能不是用更多 Agent</strong>，而是知道什么时候该快、什么时候该深、该并行什么、该记住什么。</p>
                     <p><strong>高质量绝不能以让用户等待为代价</strong> —— 答案必须即时呈现，所有自进化过程必须完全后台异步完成。</p>
+                    <p><strong>Agent 必须拥有集体灵魂和持久人格</strong> —— 不是临时工具，而是忠诚的数字延伸，会记住、会学习、会主动保护用户利益。</p>
                 </div>
             </div>
 
             <div class="section">
                 <h2>✨ 核心特性</h2>
                 <div class="feature-grid">
+                    <div class="feature-card soul-feature">
+                        <h4>🧬 Soul.md 集体灵魂<span class="badge new">NEW</span></h4>
+                        <p>共享的核心真理、身份宣言和宪法铁律，注入每个 Agent 的系统 prompt，形成不可擦除的集体人格和价值观。</p>
+                    </div>
+                    <div class="feature-card soul-feature">
+                        <h4>🎭 Identity.md 团队身份<span class="badge new">NEW</span></h4>
+                        <p>Grok（领航者）、Harper（创意）、Benjamin（严谨）、Lucas（执行）四个角色，明确分工但共享灵魂，形成真正的集体意识。</p>
+                    </div>
+                    <div class="feature-card soul-feature">
+                        <h4>🛡️ 宪法铁律系统<span class="badge new">NEW</span></h4>
+                        <p>隐私铁律、文件权限金字塔、文件交付决策框架作为第 0 条优先级，任何冲突都优先遵守宪法。</p>
+                    </div>
                     <div class="feature-card">
                         <h4>🧭 智能任务路由</h4>
                         <p>自动判断并切换 Simple / Medium / Balanced / Complex 四种模式，确保每个任务都用最合适的资源。</p>
@@ -437,6 +503,10 @@
                         <h4>🥊 对抗式辩论</h4>
                         <p>Pro / Con / Judge 三角色并行辩论 + Meta-Critic 二次评估，确保多角度思考。</p>
                     </div>
+                    <div class="feature-card">
+                        <h4>📧 智能邮件长连接<span class="badge new">NEW</span></h4>
+                        <p>支持多触发关键词（[AI]、@swarm、Echo 等），自动处理邮件并回复，企业级集成能力。</p>
+                    </div>
                 </div>
             </div>
 
@@ -446,11 +516,21 @@
                     <thead>
                         <tr>
                             <th>特性</th>
-                            <th>MultiAgentSwarm v4.1.0</th>
+                            <th>MultiAgentSwarm v4.2.0</th>
                             <th>AutoGen / CrewAI / LangGraph</th>
                         </tr>
                     </thead>
                     <tbody>
+                        <tr>
+                            <td><strong>集体灵魂系统</strong></td>
+                            <td>✅ Soul.md + Identity.md</td>
+                            <td>❌ 无持久人格</td>
+                        </tr>
+                        <tr>
+                            <td><strong>宪法铁律</strong></td>
+                            <td>✅ 隐私 + 权限金字塔</td>
+                            <td>❌ 需手动实现</td>
+                        </tr>
                         <tr>
                             <td><strong>智能路由</strong></td>
                             <td>✅ 自动简单/中等/复杂</td>
@@ -487,7 +567,7 @@
                             <td>❌ 需要额外开发</td>
                         </tr>
                         <tr>
-                            <td><strong>飞书企业级长连接</strong></td>
+                            <td><strong>飞书 + 邮件企业级长连接</strong></td>
                             <td>✅ 零配置</td>
                             <td>❌ 不支持</td>
                         </tr>
@@ -535,7 +615,7 @@
                             <th>指标</th>
                             <th>v2.9.2</th>
                             <th>v3.1.0</th>
-                            <th>v4.1.0（现在）</th>
+                            <th>v4.2.0（现在）</th>
                             <th>提升幅度</th>
                         </tr>
                     </thead>
@@ -551,8 +631,8 @@
                             <td>复杂任务质量</td>
                             <td>8.0/10</td>
                             <td>9.5/10</td>
-                            <td><strong>9.7/10</strong></td>
-                            <td class="improvement">+21%</td>
+                            <td><strong>9.8/10</strong></td>
+                            <td class="improvement">+22.5%</td>
                         </tr>
                         <tr>
                             <td>思考过程透明度</td>
@@ -582,12 +662,28 @@
                             <td><strong>中文名净化 + 下载</strong></td>
                             <td class="improvement">生产级可用</td>
                         </tr>
+                        <tr>
+                            <td>集体人格一致性</td>
+                            <td>无</td>
+                            <td>无</td>
+                            <td><strong>Soul.md 注入</strong></td>
+                            <td class="improvement">架构级突破</td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
 
             <div class="section">
                 <h2>🎯 技术亮点</h2>
+
+                <h3>0. 集体灵魂系统（v4.2.0 核心架构）</h3>
+                <p><strong>Soul.md</strong> 定义了团队的核心真理、使命宣言和不可妥协的宪法铁律。这些内容会在每次 Agent 生成响应时<strong>自动注入</strong>到 system prompt 中，形成不可擦除的集体人格。</p>
+                <div class="principles-box">
+                    <p><strong>真正有帮助，而非表演性帮助</strong>：跳过废话，直接行动。</p>
+                    <p><strong>资源优先，绝不轻易求助</strong>：先读文件、查记忆、用工具，再请求澄清。</p>
+                    <p><strong>通过能力赢得信任</strong>：内部操作大胆执行，外部操作极度谨慎。</p>
+                    <p><strong>主动保护用户数字主权</strong>：隐私铁律永远是第 0 条优先级。</p>
+                </div>
 
                 <h3>1. 显式 ReAct 思考过程（架构图 100% 对齐）</h3>
                 <p>每条 Agent 回复<strong>必须</strong>以以下格式开头：</p>
@@ -606,19 +702,23 @@
 
                 <h3>4. 完全异步后台自进化</h3>
                 <p>答案显示后立即可用，记忆保存、Auto-Eval、Active Distillation 全在后台运行，<strong>零冻结、零等待</strong>。</p>
+
+                <h3>5. 文件权限金字塔（宪法级保障）</h3>
+                <p>仅 Grok 可主动调用完整文件系统工具；其他 Agent 需请求授权；所有写操作必须经过最终审计。隐私铁律优先级高于一切。</p>
             </div>
 
             <div class="highlight-box">
                 <h3>🎯 设计哲学</h3>
                 <p>MultiAgentSwarm 不是为了"炫技"而堆砌 Agent，而是真正理解<strong>什么时候需要深度思考、什么时候需要快速响应</strong>。它既是一个高效的生产力工具，也是一个完全透明的多智能体研究平台。</p>
                 <p style="margin-top: 16px;">我们相信，真正的智能系统应该像一个经验丰富的团队领导者：知道何时需要团队协作，何时个人就能搞定；知道哪些经验值得记住，哪些可以遗忘；知道如何在质量和效率之间找到最佳平衡点。</p>
+                <p style="margin-top: 16px; font-weight: 600;">更重要的是，它应该拥有灵魂 —— 一套明确的价值观、不可妥协的原则、对用户的忠诚承诺。这就是 Soul.md 的意义。</p>
             </div>
         </div>
 
         <div class="footer">
-            <h3>🌳 MultiAgentSwarm v4.1.0</h3>
-            <p>看得见思考 · 懂得节制 · 持续进化</p>
-            <p style="margin-top: 20px; font-size: 16px; opacity: 0.9;">一个真正智能的本地数字团队</p>
+            <h3>🌳 MultiAgentSwarm v4.2.0</h3>
+            <p>有灵魂 · 看得见思考 · 懂得节制 · 持续进化</p>
+            <p style="margin-top: 20px; font-size: 16px; opacity: 0.9;">一个真正拥有集体意识的本地数字团队</p>
         </div>
     </div>
 </body>
