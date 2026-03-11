@@ -34,8 +34,14 @@ from email.utils import formataddr
 import markdown   # ← 新增这一行
 
 # 导入你的 Swarm 系统
-#from multi_agent_swarm_v3 import MultiAgentSwarm
-from multi_agent_swarm_v4 import MultiAgentSwarm
+# from multi_agent_swarm_v4 import MultiAgentSwarm
+# 导入你的 Swarm 系统（v5 优先，v4 自动兜底）
+try:
+    from multi_agent_swarm_v5 import MultiAgentSwarm
+    print("🚀 已加载 v5 Swarm（含 Verifier + KG主动进化）")
+except ImportError:
+    from multi_agent_swarm_v4 import MultiAgentSwarm
+    print("⚠️  v5 未找到，已自动回退到 v4")
 
 # 全局配置（启动时加载）
 feishu_config = {}
@@ -127,6 +133,7 @@ def decode_email_payload(part):
         print(f"  ❌ 解码异常: {e}")
         return ""
 
+
 # ====================== FastAPI 应用 ======================
 app = FastAPI(title="MultiAgentSwarm WebUI", version="3.1.0")
 
@@ -140,6 +147,10 @@ print("✅ /uploads 下载服务已启用")
 swarms: Dict[str, MultiAgentSwarm] = {}   # ← 每个 session 一个独立实例
 global_swarm: Optional[MultiAgentSwarm] = None    # ← 新增：飞书、邮箱、配置API共用一个（最简方案）
 conversations: Dict[str, List[Dict]] = {}
+# ====================== 管理员指令系统 ======================
+SWARM_ADMIN_PASSWORD = os.getenv("SWARM_ADMIN_PASSWORD", "1234567890")
+email_enabled = True      # 邮件轮询开关
+feishu_enabled = True     # 飞书长连接开关
 
 
 # ====================== Pydantic 模型 ======================
@@ -168,12 +179,36 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
     return session_id
 
 
-def get_or_create_swarm(session_id: str) -> MultiAgentSwarm:
-    """懒加载 + 每个 session_id 一个完全独立的 Swarm 实例（核心 8 行）"""
+def get_or_create_swarm(session_id: str, version: Optional[str] = None) -> MultiAgentSwarm:
+    """懒加载 + 支持同会话内实时切换 v4 / v5（最终版）"""
     global swarms
+    target = version or "v5"
+
+    # 🔥 新增：同会话内版本变化时强制重建实例
+    if session_id in swarms:
+        # 简单记录当前实例的版本（用一个属性标记）
+        current = swarms[session_id]
+        if getattr(current, "_swarm_version", None) != target:
+            print(f"🔄 会话 {session_id[:8]}... 版本变化 {getattr(current, '_swarm_version', 'unknown')} → {target}，重建实例")
+            del swarms[session_id]  # 强制重建
+
     if session_id not in swarms:
-        print(f"🚀 为会话 {session_id[:8]}... 创建独立 Swarm 实例")
-        swarms[session_id] = MultiAgentSwarm(config_path="swarm_config.yaml")
+        print(f"🚀 会话 {session_id[:8]}... 请求版本: {target}")
+
+        try:
+            if target == "v5":
+                from multi_agent_swarm_v5 import MultiAgentSwarm as SwarmClass
+                print("   ✅ 已加载 **v5**（含 Verifier + KG主动进化）")
+            else:
+                from multi_agent_swarm_v4 import MultiAgentSwarm as SwarmClass
+                print("   ✅ 已加载 **v4**")
+        except ImportError:
+            from multi_agent_swarm_v4 import MultiAgentSwarm as SwarmClass
+            print("   ⚠️  v5 未找到，已自动回退 v4")
+
+        swarms[session_id] = SwarmClass(config_path="swarm_config.yaml")
+        swarms[session_id]._swarm_version = target  # ← 标记当前版本
+
     return swarms[session_id]
 
 
@@ -240,6 +275,32 @@ def sanitize_filename(original_name: str) -> str:
         name = "file"
     return name.lower()
 
+def detect_version_from_message(message: str) -> Optional[str]:
+    """从自然语言消息中智能检测版本指定（中英混用，支持多种表达）"""
+    if not message:
+        return None
+    msg = message.lower().strip()
+
+    # v5 关键词（优先匹配）
+    v5_patterns = [
+        r'用v5', r'切换到v5', r'v5模式', r'使用v5', r'新版本',
+        r'switch to v5', r'use v5', r'v5 version', r'new version'
+    ]
+    for pat in v5_patterns:
+        if re.search(pat, msg):
+            return "v5"
+
+    # v4 关键词
+    v4_patterns = [
+        r'用v4', r'切换到v4', r'v4模式', r'使用v4', r'旧版本',
+        r'switch to v4', r'use v4', r'old version', r'v4 version'
+    ]
+    for pat in v4_patterns:
+        if re.search(pat, msg):
+            return "v4"
+
+    return None
+
 
 def save_uploaded_content(content: bytes, original_name: str) -> Optional[str]:
     """保存附件并返回路径"""
@@ -255,6 +316,111 @@ def save_uploaded_content(content: bytes, original_name: str) -> Optional[str]:
     except Exception as e:
         print(f"❌ 附件保存失败: {e}")
         return None
+
+def handle_admin_command(message: str, session_id: Optional[str] = None) -> Optional[str]:
+    """对话内管理员指令系统（完整中英双语支持）"""
+    if not message:
+        return None
+
+    # 🔥 必须放在最开头
+    global email_enabled
+    global feishu_enabled
+
+    msg = message.lower().strip()
+
+    # 提取口令
+    pw_match = re.search(r'(?:口令|password)[:=]\s*(\S+)', message, re.IGNORECASE)
+    provided_pw = pw_match.group(1) if pw_match else None
+
+    # ==================== /help（中英双语 + 丰富英文触发词） ====================
+    if any(k in msg for k in [
+        "/help", "help", "commands", "admin help", "指令帮助",
+        "管理员命令", "命令列表", "？", "help me", "what commands"
+    ]):
+        pw_status = "**❌ 已禁用（空密码）**" if not SWARM_ADMIN_PASSWORD else "✅ 已启用"
+        help_text = f"""**🛠 MultiAgentSwarm Admin Commands（管理员指令）**
+
+**Password Status**: {pw_status}
+
+**Basic Commands（基础指令 - 无需口令）**
+• `/help` 或 `help` 或 `commands`          → 显示此帮助
+• `系统状态` / `status` / `system status`  → 查看实时状态
+• `开启邮件` / `enable email`              → 开启邮件轮询
+• `关闭邮件` / `disable email`             → 关闭邮件轮询
+• `开启飞书` / `enable feishu`             → 开启飞书
+• `关闭飞书` / `disable feishu`            → 关闭飞书
+• `清理上传文件` / `clean uploads`         → 清理附件文件夹
+
+**Dangerous Commands（危险指令 - 需要口令）**
+• `重置记忆 口令:xxx` / `reset memory password:xxx` → 清空所有记忆
+• `关闭程序 口令:xxx` / `shutdown password:xxx`     → 安全关闭整个服务
+
+**Password Setting**: Environment variable `SWARM_ADMIN_PASSWORD`（留空 = 禁用口令）
+
+Just type any command — system auto-detects 中英！"""
+        return help_text
+
+    # 关闭程序（已修复为 os._exit）
+    if any(k in msg for k in ["关闭程序", "关机", "shutdown", "退出程序", "exit", "quit"]):
+        if provided_pw == SWARM_ADMIN_PASSWORD or not SWARM_ADMIN_PASSWORD:
+            print("🛑 收到管理员关闭指令 → 正在安全退出...")
+            import os
+            os._exit(0)
+        else:
+            return "❌ 口令错误！关闭程序需要正确口令。"
+
+    # 重置记忆（支持英文）
+    if any(k in msg for k in ["重置记忆", "清空记忆", "reset memory", "clear memory", "reset", "clear all"]):
+        if (provided_pw == SWARM_ADMIN_PASSWORD or not SWARM_ADMIN_PASSWORD) and session_id:
+            if session_id in conversations:
+                conversations[session_id].clear()
+            if session_id in swarms:
+                swarm = swarms[session_id]
+                if hasattr(swarm, "reset_memory"):
+                    swarm.reset_memory()
+                try:
+                    if hasattr(swarm, 'primal_memory'): swarm.primal_memory.clear()
+                    if hasattr(swarm, 'vector_memory'): swarm.vector_memory.clear()
+                    if hasattr(swarm, 'knowledge_graph'): swarm.knowledge_graph.clear()
+                except:
+                    pass
+            return "✅ 当前会话 + 所有记忆层已完全重置！（All memory cleared!）"
+
+    # 邮件开关（支持英文）
+    if any(k in msg for k in ["开启邮件", "打开邮件", "enable email", "start email"]):
+        email_enabled = True
+        return "✅ 邮件功能已开启（Email polling enabled）"
+    if any(k in msg for k in ["关闭邮件", "停止邮件", "disable email", "stop email"]):
+        email_enabled = False
+        return "✅ 邮件功能已关闭（Email polling disabled）"
+
+    # 飞书开关（支持英文）
+    if any(k in msg for k in ["开启飞书", "打开飞书", "enable feishu", "start feishu"]):
+        feishu_enabled = True
+        return "✅ 飞书功能已开启（Feishu enabled）"
+    if any(k in msg for k in ["关闭飞书", "停止飞书", "disable feishu", "stop feishu"]):
+        feishu_enabled = False
+        return "✅ 飞书功能已关闭（Feishu disabled）"
+
+    # 系统状态（支持英文）
+    if any(k in msg for k in ["系统状态", "status", "system status", "查看状态"]):
+        return (f"📊 **MultiAgentSwarm Status**\n"
+                f"• Version: v5（Dynamic v4/v5 switch enabled）\n"
+                f"• Email Polling: {'✅ Enabled' if email_enabled else '❌ Disabled'}\n"
+                f"• Feishu: {'✅ Enabled' if feishu_enabled else '❌ Disabled'}\n"
+                f"• Sessions: {len(swarms)}\n"
+                f"• Password: {'Disabled (empty)' if not SWARM_ADMIN_PASSWORD else 'Enabled'}")
+
+    # 清理上传文件
+    if any(k in msg for k in ["清理上传文件", "清理附件", "clean uploads", "clear files"]):
+        import shutil
+        upload_dir = Path("uploads")
+        if upload_dir.exists():
+            shutil.rmtree(upload_dir)
+            upload_dir.mkdir()
+        return "🧹 所有上传附件已清理完成！（All uploads cleared!）"
+
+    return None
 
 
 # ====================== API 端点 ======================
@@ -501,6 +667,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
+            # 🔥 恢复取消功能 + 支持版本检测（最终稳定版）
             if data.get("type") == "cancel":
                 session_id = data.get("session_id")
                 if session_id and session_id in swarms:
@@ -518,32 +685,43 @@ async def websocket_endpoint(websocket: WebSocket):
 
             message = data.get("message", "").strip()
             if not message:
-                await websocket.send_json({
-                    "type": "error",
-                    "content": "❌ 消息不能为空"
-                })
+                await websocket.send_json({"type": "error", "content": "❌ 消息不能为空"})
                 continue
 
-            # ==================== 关键修复：顺序 + 定义正确 ====================
+            # 🔥 先获取 session_id（关键修复！）
             session_id = get_or_create_session(data.get("session_id"))
+
+            # 🔥 新增：管理员指令系统（最高优先级拦截）
+            admin_response = handle_admin_command(message, session_id)
+            if admin_response:
+                await websocket.send_json({"type": "stream", "agent": "System", "content": admin_response})
+                await websocket.send_json({"type": "end"})
+                continue  # ← 改成 continue 更稳妥
+
+            # 🔥 自然语言版本检测（核心功能）
+            detected_version = detect_version_from_message(message)
+            if detected_version:
+                await websocket.send_json({
+                    "type": "log",
+                    "content": f"🔄 已检测到版本指令 → 切换到 **{detected_version.upper()}**"
+                })
+
+            current_swarm = get_or_create_swarm(session_id, detected_version)  # ← 带版本
+
             use_memory = data.get("use_memory", False)
             memory_key = data.get("memory_key", "default")
             force_complexity = data.get("force_complexity")
 
-            # 当前会话的独立 Swarm 实例（必须先定义！）
-            current_swarm = get_or_create_swarm(session_id)
             current_swarm._reset_cancel_flag()
 
             # ====================== 【WebUI双层控制】 ======================
             if force_complexity in ("simple", "balanced", "complex"):
-                # 手动选择：完全放行
                 print(f"🌐 [WebUI] 用户手动选择 {force_complexity.capitalize()}")
                 current_swarm._webui_auto_mode = False
             else:
-                # 自动模式：启用 Complex 降级保护
                 print(f"🌐 [WebUI] 自动模式 → Complex 降级保护已启用")
                 current_swarm._webui_auto_mode = True
-                force_complexity = None  # 让 Swarm 自动路由
+                force_complexity = None
             # ============================================================
 
             user_msg = {
@@ -821,141 +999,10 @@ def start_feishu_long_connection():
         feishu_client = lark_oapi.Client.builder().app_id(feishu_config.get("app_id")).app_secret(
             feishu_config.get("app_secret")).build()
 
-        # def handle_message(data: lark_oapi.im.v1.P2ImMessageReceiveV1):
-        #     try:
-        #         event = data.event
-        #         msg = event.message
-        #         chat_id = msg.chat_id
-        #         message_id = msg.message_id
-        #         if not message_id or not chat_id:
-        #             return
-        #
-        #         # 添加👍反应
-        #         try:
-        #             reaction_req = lark_oapi.BaseRequest.builder() \
-        #                 .http_method(lark_oapi.HttpMethod.POST) \
-        #                 .uri(f"/open-apis/im/v1/messages/{message_id}/reactions") \
-        #                 .token_types({lark_oapi.AccessTokenType.TENANT}) \
-        #                 .body({"reaction_type": {"emoji_type": "THUMBSUP"}}) \
-        #                 .build()
-        #
-        #             reaction_resp = feishu_client.request(reaction_req)
-        #             if reaction_resp.success():
-        #                 print(f"✅ 👍 已添加")
-        #         except Exception as e:
-        #             print(f"⚠️ 👍 添加失败: {str(e)[:80]}")
-        #
-        #         content_str = msg.content or "{}"
-        #         content_json = json.loads(content_str)
-        #         full_message = ""
-        #
-        #         # 处理附件
-        #         if msg.message_type in ("file", "image"):
-        #             file_key = None
-        #             original_name = "unknown_file"
-        #             file_type = msg.message_type if msg.message_type in ("image", "file") else "file"
-        #
-        #             if msg.message_type == "image":
-        #                 file_key = content_json.get("image_key")
-        #                 original_name = f"image_{int(time.time())}.jpg"
-        #             else:
-        #                 file_key = content_json.get("file_key")
-        #                 original_name = content_json.get("file_name", "file")
-        #
-        #             if not file_key:
-        #                 return
-        #
-        #             print(f"📥 Feishu 收到附件: {original_name}")
-        #
-        #             request = GetMessageResourceRequest.builder() \
-        #                 .message_id(message_id) \
-        #                 .file_key(file_key) \
-        #                 .type(file_type) \
-        #                 .build()
-        #
-        #             response = feishu_client.im.v1.message_resource.get(request)
-        #
-        #             if not response.success():
-        #                 print(f"❌ 下载附件失败: {response.msg}")
-        #                 return
-        #
-        #             safe_stem = sanitize_filename(Path(original_name).stem)
-        #             safe_filename = f"{uuid.uuid4().hex[:8]}_{safe_stem}{Path(original_name).suffix.lower()}"
-        #             upload_dir = Path("uploads")
-        #             upload_dir.mkdir(exist_ok=True)
-        #             file_path = upload_dir / safe_filename
-        #
-        #             with open(file_path, "wb") as f:
-        #                 f.write(response.raw.content)
-        #
-        #             print(f"✅ 附件已保存: {file_path}")
-        #             full_message = f"[来自飞书] 用户发送了附件\n\n📎 附件:\n- {file_path}"
-        #
-        #             reminder = CreateMessageRequest.builder() \
-        #                 .receive_id_type("chat_id") \
-        #                 .request_body(
-        #                 CreateMessageRequestBody.builder()
-        #                 .receive_id(chat_id)
-        #                 .msg_type("text")
-        #                 .content(json.dumps({"text": f"🤖 已收到附件《{original_name}》，正在处理..."}))
-        #                 .build()
-        #             ).build()
-        #             feishu_client.im.v1.message.create(reminder)
-        #
-        #         elif msg.message_type == "text":
-        #             content = content_json.get("text", "").strip()
-        #             if not content:
-        #                 return
-        #             full_message = f"[来自飞书] {content}"
-        #         else:
-        #             return
-        #
-        #         # 判断是否需要回复
-        #         should_reply = msg.chat_type == "p2p"
-        #         if msg.chat_type == "group" and hasattr(event, "mentions") and event.mentions:
-        #             for m in event.mentions:
-        #                 if getattr(m.id, "open_id", None):
-        #                     should_reply = True
-        #                     if msg.message_type == "text":
-        #                         content = re.sub(r'@\S+\s*', '', content).strip()
-        #                         full_message = f"[来自飞书] {content}"
-        #                     break
-        #
-        #         if not should_reply:
-        #             return
-        #
-        #         print(f"📥 Feishu 收到消息: {full_message[:70]}...")
-        #
-        #         # ✅ 调用 Swarm
-        #         answer = global_swarm.solve(
-        #             full_message,
-        #             use_memory=True,
-        #             memory_key="feishu_long"
-        #         )
-        #
-        #         request = CreateMessageRequest.builder() \
-        #             .receive_id_type("chat_id") \
-        #             .request_body(
-        #             CreateMessageRequestBody.builder()
-        #             .receive_id(chat_id)
-        #             .msg_type("text")
-        #             .content(json.dumps({"text": answer}))
-        #             .build()
-        #         ).build()
-        #
-        #         response = feishu_client.im.v1.message.create(request)
-        #         if response.success():
-        #             print("✅ 已回复")
-        #         else:
-        #             print(f"⚠️ 回复失败: {response.msg}")
-        #
-        #     except Exception as e:
-        #         print(f"❌ 处理飞书消息异常: {e}")
-        #         import traceback
-        #         traceback.print_exc()
-
         def handle_message(data: lark_oapi.im.v1.P2ImMessageReceiveV1):
             try:
+                if not feishu_enabled: return
+
                 event = data.event
                 msg = event.message
                 chat_id = msg.chat_id
@@ -1482,6 +1529,9 @@ def start_email_poller(config: dict):
     # 主循环
     while True:
         try:
+            if not email_enabled:
+                time.sleep(interval)
+                continue
             print(f"\n{'=' * 60}")
             print(f"🔄 检查邮件 ({datetime.now().strftime('%H:%M:%S')})")
             print(f"{'=' * 60}\n")
