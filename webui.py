@@ -419,7 +419,7 @@ async def startup_event():
     # 邮箱启动
     email_config = cfg.get("email", {})
     email_enabled = email_config.get("enabled", False)
-    if email_config.get("imap_user") and email_enable:
+    if email_config.get("imap_user") and email_enabled:
         threading.Thread(
             target=start_email_poller,
             args=(email_config,),
