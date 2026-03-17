@@ -33,15 +33,8 @@ from email.utils import formataddr
 
 import markdown   # ← 新增这一行
 
-# 导入你的 Swarm 系统
-# from multi_agent_swarm_v4 import MultiAgentSwarm
-# 导入你的 Swarm 系统（v5 优先，v4 自动兜底）
-try:
-    from multi_agent_swarm_v5 import MultiAgentSwarm
-    print("🚀 已加载 v5 Swarm（含 Verifier + KG主动进化）")
-except ImportError:
-    from multi_agent_swarm_v4 import MultiAgentSwarm
-    print("⚠️  v5 未找到，已自动回退到 v4")
+from multi_agent_swarm_v5_1 import MultiAgentSwarm   # ← 推荐改成这个名字
+print("🚀 已加载 v5 Swarm（含 Verifier + KG主动进化）")
 
 # 全局配置（启动时加载）
 feishu_config = {}
@@ -53,6 +46,8 @@ GetMessageResourceRequest = None
 
 feishu_swarm: Optional[MultiAgentSwarm] = None   # ← 新增：飞书专用
 email_swarm: Optional[MultiAgentSwarm] = None    # ← 新增：邮件专用
+email_enabled: bool = False
+feishu_enabled: bool = False
 
 
 # ====================== 邮件编码辅助函数 ======================
@@ -149,8 +144,8 @@ global_swarm: Optional[MultiAgentSwarm] = None    # ← 新增：飞书、邮箱
 conversations: Dict[str, List[Dict]] = {}
 # ====================== 管理员指令系统 ======================
 SWARM_ADMIN_PASSWORD = os.getenv("SWARM_ADMIN_PASSWORD", "1234567890")
-email_enabled = True      # 邮件轮询开关
-feishu_enabled = True     # 飞书长连接开关
+# email_enabled = True      # 邮件轮询开关
+# feishu_enabled = True     # 飞书长连接开关
 
 
 # ====================== Pydantic 模型 ======================
@@ -179,36 +174,13 @@ def get_or_create_session(session_id: Optional[str] = None) -> str:
     return session_id
 
 
-def get_or_create_swarm(session_id: str, version: Optional[str] = None) -> MultiAgentSwarm:
-    """懒加载 + 支持同会话内实时切换 v4 / v5（最终版）"""
+def get_or_create_swarm(session_id: str) -> MultiAgentSwarm:
+    """每个会话创建一个独立的 v5 Swarm 实例（v4 已移除）"""
     global swarms
-    target = version or "v5"
-
-    # 🔥 新增：同会话内版本变化时强制重建实例
-    if session_id in swarms:
-        # 简单记录当前实例的版本（用一个属性标记）
-        current = swarms[session_id]
-        if getattr(current, "_swarm_version", None) != target:
-            print(f"🔄 会话 {session_id[:8]}... 版本变化 {getattr(current, '_swarm_version', 'unknown')} → {target}，重建实例")
-            del swarms[session_id]  # 强制重建
-
     if session_id not in swarms:
-        print(f"🚀 会话 {session_id[:8]}... 请求版本: {target}")
-
-        try:
-            if target == "v5":
-                from multi_agent_swarm_v5 import MultiAgentSwarm as SwarmClass
-                print("   ✅ 已加载 **v5**（含 Verifier + KG主动进化）")
-            else:
-                from multi_agent_swarm_v4 import MultiAgentSwarm as SwarmClass
-                print("   ✅ 已加载 **v4**")
-        except ImportError:
-            from multi_agent_swarm_v4 import MultiAgentSwarm as SwarmClass
-            print("   ⚠️  v5 未找到，已自动回退 v4")
-
-        swarms[session_id] = SwarmClass(config_path="swarm_config.yaml")
-        swarms[session_id]._swarm_version = target  # ← 标记当前版本
-
+        print(f"🚀 会话 {session_id[:8]}... 创建 v5 Swarm 实例")
+        swarms[session_id] = MultiAgentSwarm(config_path="swarm_config.yaml")
+        swarms[session_id]._swarm_version = "v5"  # 调试标记，可保留
     return swarms[session_id]
 
 
@@ -274,33 +246,6 @@ def sanitize_filename(original_name: str) -> str:
     if not name:
         name = "file"
     return name.lower()
-
-def detect_version_from_message(message: str) -> Optional[str]:
-    """从自然语言消息中智能检测版本指定（中英混用，支持多种表达）"""
-    if not message:
-        return None
-    msg = message.lower().strip()
-
-    # v5 关键词（优先匹配）
-    v5_patterns = [
-        r'用v5', r'切换到v5', r'v5模式', r'使用v5', r'新版本',
-        r'switch to v5', r'use v5', r'v5 version', r'new version'
-    ]
-    for pat in v5_patterns:
-        if re.search(pat, msg):
-            return "v5"
-
-    # v4 关键词
-    v4_patterns = [
-        r'用v4', r'切换到v4', r'v4模式', r'使用v4', r'旧版本',
-        r'switch to v4', r'use v4', r'old version', r'v4 version'
-    ]
-    for pat in v4_patterns:
-        if re.search(pat, msg):
-            return "v4"
-
-    return None
-
 
 def save_uploaded_content(content: bytes, original_name: str) -> Optional[str]:
     """保存附件并返回路径"""
@@ -405,7 +350,7 @@ Just type any command — system auto-detects 中英！"""
     # 系统状态（支持英文）
     if any(k in msg for k in ["系统状态", "status", "system status", "查看状态"]):
         return (f"📊 **MultiAgentSwarm Status**\n"
-                f"• Version: v5（Dynamic v4/v5 switch enabled）\n"
+                f"• Version: v5\n"
                 f"• Email Polling: {'✅ Enabled' if email_enabled else '❌ Disabled'}\n"
                 f"• Feishu: {'✅ Enabled' if feishu_enabled else '❌ Disabled'}\n"
                 f"• Sessions: {len(swarms)}\n"
@@ -427,6 +372,7 @@ Just type any command — system auto-detects 中英！"""
 @app.on_event("startup")
 async def startup_event():
     global feishu_config
+    global email_enabled, feishu_enabled
     with open("swarm_config.yaml", "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
@@ -455,14 +401,12 @@ async def startup_event():
     resolve_env_placeholders(cfg)  # 调用替换（针对整个配置）
     feishu_config = cfg.get("feishu", {})
 
-    # 删除或注释掉这行（因为现在懒加载）：
-    # init_swarm()
-
     # 飞书启动
     app_id = feishu_config.get("app_id", "").strip()
     app_secret = feishu_config.get("app_secret", "").strip()
-    feishu_enable = feishu_config.get("enabled", False)
-    if app_id and app_secret and feishu_enable:
+
+    feishu_enabled = feishu_config.get("enabled", False)
+    if app_id and app_secret and feishu_enabled:
         print("🚀 飞书配置有效，正在启动长连接服务...")
         threading.Thread(
             target=start_feishu_long_connection,
@@ -474,7 +418,7 @@ async def startup_event():
 
     # 邮箱启动
     email_config = cfg.get("email", {})
-    email_enable = email_config.get("enabled", False)
+    email_enabled = email_config.get("enabled", False)
     if email_config.get("imap_user") and email_enable:
         threading.Thread(
             target=start_email_poller,
@@ -667,7 +611,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_json()
 
-            # 🔥 恢复取消功能 + 支持版本检测（最终稳定版）
+            # 🔥 取消功能
             if data.get("type") == "cancel":
                 session_id = data.get("session_id")
                 if session_id and session_id in swarms:
@@ -698,15 +642,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "end"})
                 continue  # ← 改成 continue 更稳妥
 
-            # 🔥 自然语言版本检测（核心功能）
-            detected_version = detect_version_from_message(message)
-            if detected_version:
-                await websocket.send_json({
-                    "type": "log",
-                    "content": f"🔄 已检测到版本指令 → 切换到 **{detected_version.upper()}**"
-                })
-
-            current_swarm = get_or_create_swarm(session_id, detected_version)  # ← 带版本
+            current_swarm = get_or_create_swarm(session_id)
 
             use_memory = data.get("use_memory", False)
             memory_key = data.get("memory_key", "default")
