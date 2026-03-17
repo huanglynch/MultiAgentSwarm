@@ -1,70 +1,85 @@
 """
-文件写入工具（已强制 uploads/ 输出版）
-功能：将内容写入指定文件，**所有生成文件自动放入 uploads/**（支持子目录）
-安全限制：只能写入脚本目录及其子目录
+文件写入工具 v2.1（中文/日文友好 + 生产强化版）
+- 支持中文/日文文件名（只过滤危险字符）
+- 启动时强制创建 uploads/
+- 详细错误 + 日志 + 友好返回
 """
-
 import re
 import time
+import logging
 from pathlib import Path
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def tool_function(file_path: str, content: str, mode: str = "w"):
-    """
-    写入文件内容（安全版本 + 强制 uploads/ 输出）
-    """
     try:
-        # ================ 【核心：强制所有生成文件进入 uploads/】================
-        original_path = file_path
-        # 清理文件名（防止中文、空格导致下载失败）
-        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', Path(file_path).name)
-        if len(safe_name) < 3:
-            safe_name = f"generated_file_{int(time.time())}"
+        if not content or not file_path:
+            return {"success": False, "error": "file_path 和 content 不能为空"}
 
-        # 强制放入 uploads/（无论用户输入什么路径）
-        if not str(file_path).lower().startswith('uploads'):
-            file_path = f"uploads/{safe_name}"
-            print(f"📤 write_file 已强制规范化: '{original_path}' → '{file_path}'")
+        original_path = file_path.strip()
+        original_name = Path(original_path).name
+
+        # === 1. 温和清洗（保留中文/日文，只去 Windows 非法字符）===
+        safe_name = re.sub(r'[\\/:*?"<>|]', '_', original_name)
+        if len(safe_name) < 2 or safe_name in ('.', '..'):
+            safe_name = f"report_{int(time.time())}.md"
+        # 自动加 .md
+        if not safe_name.lower().endswith(('.md', '.txt', '.json')):
+            safe_name += '.md'
+
+        # 限制文件名长度（防止超长路径）
+        safe_name = safe_name[:200]
+
+        # === 2. 强制 uploads/ + 日期前缀（防重名）===
+        today = datetime.now().strftime("%Y%m%d")
+        if not str(original_path).lower().startswith("uploads"):
+            file_path = f"uploads/{today}_{safe_name}"
         else:
-            file_path = str(Path(file_path))  # 用户已指定 uploads/，保留结构
+            parent = Path(original_path).parent
+            file_path = str(parent / f"{today}_{safe_name}" if str(parent) != "." else f"uploads/{today}_{safe_name}")
 
-        # ====================== 原有安全逻辑（完全不动） ======================
+        # === 3. 安全解析 + 确保目录存在 ===
         SCRIPT_ROOT = Path(__file__).parent.parent.parent.absolute()
+        uploads_dir = SCRIPT_ROOT / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
 
-        target_path = Path(file_path)
-        if not target_path.is_absolute():
-            target_path = SCRIPT_ROOT / target_path
-        target_path = target_path.resolve()
+        target_path = (SCRIPT_ROOT / file_path).resolve()
 
         try:
             relative_path = target_path.relative_to(SCRIPT_ROOT)
         except ValueError:
-            return {"success": False, "error": "安全错误：不允许写入脚本目录外的文件"}
+            return {"success": False, "error": "安全限制：只能写入项目目录内", "attempted": str(target_path)}
 
-        ALLOWED_EXTENSIONS = {'.txt', '.md', '.json', '.csv', '.yaml', '.yml', '.log', '.html', '.xml', '.py', '.sh', '.sql', '.rst'}
-        if target_path.suffix.lower() not in ALLOWED_EXTENSIONS:
-            return {"success": False, "error": f"不允许的文件类型: {target_path.suffix}"}
+        ALLOWED_EXT = {'.txt', '.md', '.json', '.csv', '.yaml', '.yml', '.html', '.log'}
+        if target_path.suffix.lower() not in ALLOWED_EXT:
+            return {"success": False, "error": f"不支持的文件类型: {target_path.suffix}（推荐 .md）"}
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if mode not in ("w", "a"):
-            return {"success": False, "error": f"无效的写入模式: {mode}"}
 
         with open(target_path, mode, encoding="utf-8") as f:
             f.write(content)
 
-        file_size = target_path.stat().st_size
+        # 【修复】使用相对路径生成正确的 URL
+        download_url = f"/{relative_path.as_posix()}"
+        logger.info(f"✅ write_file 成功: {relative_path} ({len(content):,} 字符)")
+
         return {
             "success": True,
+            "message": f"✅ 文件写入成功！\n路径: {relative_path}\n下载: {download_url}",
             "file_path": str(target_path),
             "relative_path": str(relative_path),
-            "bytes_written": len(content.encode("utf-8")),
-            "file_size": file_size,
-            "mode": "覆盖写入" if mode == "w" else "追加写入",
-            "download_url": f"/uploads/{Path(file_path).name}"   # 供前端/飞书使用
+            "download_url": download_url,
+            "size": len(content)
         }
+
+    except PermissionError:
+        logger.error("write_file 权限错误")
+        return {"success": False, "error": "权限错误：无法写入 uploads/ 目录。请检查文件夹权限或以管理员运行"}
     except Exception as e:
-        return {"success": False, "error": f"未知错误：{type(e).__name__} - {str(e)}"}
+        logger.error(f"write_file 异常: {str(e)}", exc_info=True)
+        return {"success": False, "error": f"写入失败: {type(e).__name__} - {str(e)[:200]}"}
 
 
 tool_schema = {
