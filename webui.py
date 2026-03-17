@@ -335,7 +335,7 @@ def handle_admin_command(message: str, session_id: Optional[str] = None) -> Opti
     # ==================== /help（中英双语 + 丰富英文触发词） ====================
     if any(k in msg for k in [
         "/help", "help", "commands", "admin help", "指令帮助",
-        "管理员命令", "命令列表", "？", "help me", "what commands"
+        "管理员命令", "命令列表", "help me", "what commands"
     ]):
         pw_status = "**❌ 已禁用（空密码）**" if not SWARM_ADMIN_PASSWORD else "✅ 已启用"
         help_text = f"""**🛠 MultiAgentSwarm Admin Commands（管理员指令）**
