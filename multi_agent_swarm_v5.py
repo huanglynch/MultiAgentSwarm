@@ -843,19 +843,27 @@ class Agent:
                 f"{format_instruction}"  # ← 关键：格式要求仍然保留
             )
 
-        messages = [{"role": "system", "content": system_prompt}]
+        # ====================== 🔥 关键修复（15行） ======================
+        # 合并所有 System（Master Plan、Primal记忆、最终指令、自检等）到一个 system message
+        system_parts = [system_prompt]
+        for h in history:
+            if h["speaker"] == "System":
+                system_parts.append(str(h.get("content", "")))
 
-        # 处理历史消息
+        combined_system = "\n\n".join([p.strip() for p in system_parts if p.strip()])
+
+        messages = [{"role": "system", "content": combined_system}]
+
+        # 只处理非 System 消息（User 保持 list 支持图片，Assistant 正常）
         for h in history:
             if h["speaker"] == "User":
                 messages.append({"role": "user", "content": h["content"]})
-            elif h["speaker"] == "System":
-                messages.append({"role": "system", "content": h["content"]})
-            else:
+            elif h["speaker"] != "System":  # 跳过所有 System
                 messages.append({
                     "role": "assistant",
                     "content": f"[{h['speaker']}] {h.get('content', '')}"
                 })
+        # ================================================================
 
         est_tokens = sum(len(str(m.get("content", ""))) // 2 for m in messages)
         if est_tokens > 110000 and "128" in str(self.context_limit_k):
