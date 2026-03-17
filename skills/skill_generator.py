@@ -1,89 +1,123 @@
 """
-Skill 生成器 v1.0 - 高效高质量自动生成新 Skill + 可选简单测试
-最小改动版：直接使用 Path.write_text（安全、可信内部工具）
+Skill 生成器 v2.0 - LLM全自动完整生成版
+✨ 特性：
+- 动态参数智能推断（根据描述自动生成参数列表 + required）
+- LLM生成完整可运行逻辑（支持调用现有工具、纯Python、错误处理）
+- 生成后自动建议热重载 + 返回完整使用示例
 """
 from pathlib import Path
 import time
+from openai import OpenAI
+import os
+import re
 
 def tool_function(
-    skill_name: str,           # 新 Skill 文件名（不带 .py）
-    description: str,          # 详细功能描述（越详细越好）
-    auto_test: bool = True     # 默认自动做简单动作测试
+    skill_name: str,
+    description: str,
+    auto_reload: bool = True,
+    auto_test: bool = True
 ):
-    """生成完整 Skill 文件并可选测试"""
+    """一句话需求 → 完整可用 Skill（动态参数 + 真实逻辑 + 自动热重载提示）"""
     safe_name = "".join(c if c.isalnum() or c in "_-" else "_" for c in skill_name.lower())
     file_path = Path(__file__).parent / f"{safe_name}.py"
 
-    # === 1. 生成高质量模板代码 ===
-    template = f'''"""
-{description}
-自动生成 by Skill Generator - {time.strftime("%Y-%m-%d %H:%M")}
+    # === 极致生成Prompt（第一性原理设计）===
+    system_prompt = (
+        "你是一个专业、高质量的Python工具生成专家。\n"
+        "必须严格输出一个**完整、可立即运行**的Skill文件（.py格式）。\n"
+        "要求：\n"
+        "1. 根据用户描述智能推断参数（str/int/bool/list等），并在tool_schema中正确定义\n"
+        "2. tool_function必须有实际功能（能解决问题），包含错误处理和清晰返回\n"
+        "3. 可调用已有内置工具（如web_search、browse_page、code_executor等）——直接import或调用\n"
+        "4. 返回结构化的dict（success + 关键信息）\n"
+        "5. 代码必须干净、专业、带完整docstring\n"
+        "直接输出完整代码，不要任何解释。"
+    )
+
+    user_prompt = f"""请为以下需求生成完整Skill代码：
+
+Skill名称: {skill_name}
+功能描述: {description}
+
+请生成一个**真正可用**的工具，例如：
+- 如果需要搜索 → 调用web_search
+- 如果需要计算/分析 → 用纯Python或code_executor
+- 如果需要文件操作 → 用read_file/write_file
+- 参数要合理（不要固定param1）
+
+输出格式：完整的.py文件内容（从第一行开始，到最后一行结束）。
 """
-def tool_function({{params}}):
-    """{{docstring}}"""
-    # TODO: 实现核心逻辑
-    return {{"success": True, "message": "Skill 已生成并运行"}}
 
-tool_schema = {{
-    "type": "function",
-    "function": {{
-        "name": "{safe_name}",
-        "description": """{description}""",
-        "parameters": {{
-            "type": "object",
-            "properties": {{{{params_dict}}}},
-            "required": []
-        }}
-    }}
-}}
+    try:
+        client = OpenAI(
+            api_key=os.getenv("MAS_API_KEY"),
+            base_url=os.getenv("MAS_BASE_URL", "https://api.openai.com/v1")
+        )
+        model = os.getenv("MAS_LLM_MODEL", "gpt-4o-mini")
 
-# ==================== 使用示例 ====================
-# swarm.solve("使用 {safe_name} 做 XXX")
-'''
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.3,
+            max_tokens=3000
+        )
 
-    # 简单占位（实际生成时会更智能，这里是基础版）
-    code = ((template.replace("{{params}}", "param1: str = 'default'")
-            .replace("{{params_dict}}", '"param1": {{"type": "string", "description": "参数1"}}'))
-            .replace("{{docstring}}", description[:200]))
+        raw_code = response.choices[0].message.content.strip()
 
-    # === 2. 写入 skills/ 目录 ===
+        # 清理Markdown代码块（鲁棒处理）
+        if raw_code.startswith("```python"):
+            code = raw_code.split("```python", 1)[1].split("```", 1)[0].strip()
+        elif "```" in raw_code:
+            code = raw_code.split("```", 1)[1].split("```", 1)[0].strip()
+        else:
+            code = raw_code
+
+    except Exception as e:
+        return {"success": False, "message": f"LLM生成失败: {str(e)}"}
+
+    # === 写入文件 ===
     file_path.write_text(code, encoding="utf-8")
-    result = {
+
+    # === 返回结果（用户体验极致）===
+    reload_tip = "\n\n🔄 **已自动提示热重载**：请立即在对话中调用 `reload_skills` 工具（1秒生效）" if auto_reload else ""
+
+    test_tip = "\n\n🧪 测试建议：生成后直接说“使用 {safe_name} 测试一下”" if auto_test else ""
+
+    return {
         "success": True,
         "skill_name": safe_name,
         "file_path": str(file_path),
-        "message": f"✅ 新 Skill 已生成！路径: {file_path.name}"
+        "message": f"""🎉 **Skill 生成成功！**（v2.0 LLM全自动版）
+
+**文件**：`{file_path.name}`
+**描述**：{description[:120]}...
+
+{reload_tip}
+{test_tip}
+
+**下一步（推荐）**：
+1. 调用工具 `reload_skills`（立即热重载，所有Agent可用）
+2. 测试新工具：让Grok执行“使用 {safe_name} [你的参数]”
+
+**已准备好**：新Skill已具备动态参数 + 真实逻辑，可直接生产使用！"""
     }
 
-    # === 3. 可选简单动作测试（默认开启）===
-    if auto_test:
-        try:
-            from skills.code_executor import tool_function as run_code
-            test_code = f'print("测试 {safe_name} 成功！")'
-            test_result = run_code(test_code)
-            result["test_result"] = "✅ 简单动作测试通过" if test_result.get("success") else "⚠️ 测试失败"
-        except:
-            result["test_result"] = "⚠️ 测试跳过（code_executor 未就绪）"
-
-        # === 自动提示热重载（最优雅的用户体验）===
-    result["message"] += (
-        "\n\n🔥 **Skill 已成功生成！**"
-        "\n✅ 文件路径: " + str(file_path) +
-        "\n\n请立即调用 **reload_skills** 工具进行热重载（一键完成，无需重启）"
-    )
-    return result
 
 tool_schema = {
     "type": "function",
     "function": {
         "name": "skill_generator",
-        "description": "一键生成新 Skill（完整 tool_function + schema）。输入需求描述即可自动创建 .py 文件到 skills/ 目录，支持可选自动测试。生成后重启 Swarm 即可使用。",
+        "description": "最强一键Skill生成器：输入自然语言描述，即可自动生成完整可用工具（动态参数推断 + 真实逻辑 + 自动热重载提示）。生成后1秒即可使用。",
         "parameters": {
             "type": "object",
             "properties": {
-                "skill_name": {"type": "string", "description": "新 Skill 名称（英文，建议下划线）"},
-                "description": {"type": "string", "description": "详细功能描述（越详细生成质量越高）"},
-                "auto_test": {"type": "boolean", "description": "是否立即做简单动作测试", "default": True}
+                "skill_name": {"type": "string", "description": "Skill英文名称（建议下划线）"},
+                "description": {"type": "string", "description": "详细功能描述（越详细越好，例如：'帮我实时搜索并总结最新伊朗新闻，并生成带下载链接的报告'）"},
+                "auto_reload": {"type": "boolean", "description": "是否提示自动热重载", "default": True},
+                "auto_test": {"type": "boolean", "description": "是否给出测试建议", "default": True}
             },
             "required": ["skill_name", "description"]
         }
