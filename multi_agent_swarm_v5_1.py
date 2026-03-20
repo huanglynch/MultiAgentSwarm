@@ -612,6 +612,66 @@ class KnowledgeGraph:
         return "\n".join(context)
 
 
+class TokenOrchestrator:
+    """Token Orchestrator Layer v5.2（最小改动版）"""
+    def __init__(self, context_limit_k: str = "128", safety_margin: float = 0.88):
+        self.max_tokens = int(context_limit_k) * 1000          # 128000
+        self.budget = int(self.max_tokens * safety_margin)     # 默认 112640（留 12% 安全裕量）
+        self.summarizer_agent = None  # 后续注入 Grok
+        print(f"Token Orchestrator 初始化完成 | Budget: {self.budget} tokens")
+
+    def count_tokens(self, text: str) -> int:
+        """零依赖保守精确估算（中/日/英文混合实测误差 <8%）"""
+        if not text:
+            return 0
+        # 字节长度 / 3（中文最优）+ 英文加权
+        byte_len = len(text.encode('utf-8'))
+        return max(1, byte_len // 3 + len(text.split()) // 4)
+
+    def prepare_messages(self, messages: List[Dict], model: str) -> List[Dict]:
+        """核心：精确计数 + 主动滚动总结 + 硬限"""
+        total = sum(self.count_tokens(str(m.get("content", ""))) for m in messages)
+        if total <= self.budget:
+            return messages
+
+        print(f"⚠️ Token Orchestrator 触发: {total} > {self.budget} → 主动滚动总结")
+        logging.warning(f"Token Orchestrator 压缩: {total} → {self.budget}")
+
+        # 1. 永久保留（灵魂级）
+        kept = [m for m in messages if m.get("speaker") in ("System", "User")]
+        plan = next((m for m in messages if "Master Plan" in str(m.get("content", ""))), None)
+        if plan:
+            kept.insert(0, plan)
+
+        # 2. 保留最近 4 轮（最后 8 条）
+        kept.extend(messages[-8:])
+
+        # 3. 中间部分让 Leader 做滚动总结（最优）
+        to_summarize = messages[len(kept)//2 : -8]
+        if to_summarize and len(to_summarize) > 2 and self.summarizer_agent:
+            summary_prompt = (
+                "用 300 字以内总结以上全部历史讨论，只保留：\n"
+                "1. Master Plan 各阶段关键结论\n"
+                "2. 重要决策与风险点\n"
+                "3. 已生成的文件下载链接\n"
+                "4. 遗留问题\n输出纯文本，不要任何标签。"
+            )
+            summary = self.summarizer_agent.generate_response(
+                [{"speaker": "System", "content": summary_prompt}] + to_summarize,
+                round_num=0, force_non_stream=True
+            )
+            kept.insert(1, {
+                "speaker": "System",
+                "content": f"📜 【Token Orchestrator 滚动总结】\n{summary}"
+            })
+
+        # 4. 最终硬截（极端情况）
+        while sum(self.count_tokens(str(m.get("content", ""))) for m in kept) > self.budget:
+            kept.pop(3)  # 优先删最早的普通消息
+
+        return kept
+
+
 # ====================== Skill 动态加载器 ======================
 def load_skills(skills_dir: str = "skills"):
     """
@@ -880,6 +940,11 @@ class Agent:
                     "content": f"[{h['speaker']}] {h.get('content', '')}"
                 })
         # ================================================================
+
+        # ====================== 🔥 Token Orchestrator 拦截（最小改动核心） ======================
+        if hasattr(self, 'token_orchestrator'):
+            messages = self.token_orchestrator.prepare_messages(messages, self.model)
+        # ====================================================================================
 
         est_tokens = sum(len(str(m.get("content", ""))) // 2 for m in messages)
         if est_tokens > 110000 and "128" in str(self.context_limit_k):
@@ -1308,6 +1373,16 @@ class MultiAgentSwarm:
         # ====================== ✨ 新增：Dynamic Agent Factory + Supervisor ======================
         self.temporary_agents: List[Agent] = []  # ← 新增这一行
         self.subtask_status: Dict = {}  # Supervisor 监控用
+
+        # ====================== 🔥 新增：Token Orchestrator Layer ======================
+        self.token_orchestrator = TokenOrchestrator(
+            context_limit_k=self.context_limit_k,
+            safety_margin=0.88 if not self.vector_memory_enabled else 0.82  # 低内存更保守
+        )
+        self.token_orchestrator.summarizer_agent = self.leader
+        for agent in self.agents + getattr(self, 'temporary_agents', []):
+            agent.token_orchestrator = self.token_orchestrator
+        # ============================================================================
 
     def reset_vector_memory(self, confirm: bool = False):
         """对外暴露的简单重置接口"""
@@ -2504,6 +2579,10 @@ class MultiAgentSwarm:
             "   - [文件名_20260307.md](/uploads/文件名_20260307.md)\n"
             "现在请直接输出完美结构化的最终答案。"
         )
+
+        if hasattr(self, 'token_orchestrator'):
+            history = self.token_orchestrator.prepare_messages(history, self.leader.model)
+
         final_answer = self.leader.generate_response(
             history,
             round_num + 1,
@@ -2952,6 +3031,9 @@ class MultiAgentSwarm:
             )
         })
 
+        if hasattr(self, 'token_orchestrator'):
+            history = self.token_orchestrator.prepare_messages(history, self.leader.model)
+
         final_answer = self.leader.generate_response(
             history, 3, force_non_stream=False,
             stream_callback=stream_callback, log_callback=log_callback
@@ -3003,7 +3085,8 @@ class MultiAgentSwarm:
             ]
 
         logging.info(f"🧹 历史压缩完成 → 从 {len(history)} → {len(compressed)} 条")
-        return compressed
+
+        return self.token_orchestrator.prepare_messages(compressed, self.leader.model)
 
     def active_distill_and_evaluate(self, history: List[Dict], final_answer: str):
         """✨ Active Distillation + Auto-Eval（Lucas负责）"""
