@@ -2656,6 +2656,18 @@ class MultiAgentSwarm:
         greet_words = ["你好", "hi ", "hello", "嘿", "谢谢", "ok", "好的", "明白",
                        "こんにちは", "おはよう", "ありがとう", "はい", "了解",
                        "hello", "hi", "thanks", "ok"]
+        # 🔥 PDF 单纯查看快速路径（解决用户“只想看内容”的痛点）
+        pdf_keywords = [".pdf", "pdf附件", "这个pdf", "这份pdf", "附件pdf", "pdf文件"]
+        simple_view_keywords = ["查看", "看一下", "读一下", "提取", "主要内容", "讲了什么", "是什么", "直接告诉我",
+                                "大致内容"]
+        deep_keywords = ["分析", "总结", "报告", "生成", "对比", "深度", "详细", "结构化", "下载"]
+
+        if (any(kw in task_lower for kw in pdf_keywords) and
+                any(s in task_lower for s in simple_view_keywords) and
+                not any(d in task_lower for d in deep_keywords) and
+                len(task) < 200):  # 防止超长描述被误判
+            return "medium", "rapid_synthesis", "请直接提取PDF核心内容，用简洁自然的方式告诉我。"
+
         if task_len < 20 or any(w in task_lower or w in task for w in greet_words):
             return "simple", "rapid_synthesis", "请用最简洁、自然的方式直接回答。"
 
@@ -2734,6 +2746,7 @@ class MultiAgentSwarm:
 - "请写单元测试用例修复这个 bug" / "このバグを直すユニットテストを書いて" / "Write unit tests to fix this bug" → balanced
 - "实时追踪伊朗最新动态" / "イランの最新動向をリアルタイム追跡" / "Real-time tracking of latest Iran developments" → complex
 - "こんにちは" / "Hello" → simple
+- "请帮我看一下这个PDF的内容" / "这个PDF讲了什么？" → medium
 
 现在请分类以上任务。回复严格 JSON：
 """
